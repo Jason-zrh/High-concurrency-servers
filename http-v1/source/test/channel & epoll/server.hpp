@@ -563,9 +563,6 @@ public:
     // 解决触发事件
     void HandleEvent()
     {
-        if (_event_cb)
-            _event_cb();
-            
         if ((_revents & EPOLLIN) || (_revents & EPOLLRDHUP) || (_revents & EPOLLPRI))
         {
             // 如果通知可读、断开链接、高优先级数据或外带数据
@@ -587,6 +584,9 @@ public:
             if (_close_cb)
                 _close_cb();
         }
+
+        if (_event_cb)
+            _event_cb();
     }
 
 private:
@@ -623,12 +623,12 @@ public:
         bool ret = IsExist(channel);
         if (ret)
             // 存在，进行修改更新
-            Update(channel, EPOLL_CTL_MOD);
+            return Update(channel, EPOLL_CTL_MOD);
         else
         {
             // 不存在直接添加
-            Update(channel, EPOLL_CTL_ADD);
             _channels[channel->GetFd()] = channel;
+            return Update(channel, EPOLL_CTL_ADD);
         }
     }
 

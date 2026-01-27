@@ -2,16 +2,16 @@
 #define DBG 1
 #define ERR 2
 #define DEFAULT_LOG_LEVEL INF
-#define LOG(level, format, ...)                                                                                           \
-    {                                                                                                                     \
-        if (level >= DEFAULT_LOG_LEVEL)                                                                                   \
-        {                                                                                                                 \
-            time_t t = time(NULL);                                                                                        \
-            struct tm *m = localtime(&t);                                                                                 \
-            char ts[32] = {0};                                                                                            \
-            strftime(ts, 31, "%H:%M:%S", m);                                                                              \
-            fprintf(stdout, "[%p %s %s:%d] " format "\n", (void *)pthread_self(), ts, __FILE__, __LINE__, ##__VA_ARGS__); \
-        }                                                                                                                 \
+#define LOG(level, format, ...)              \
+    {                                        \
+        if (level >= DEFAULT_LOG_LEVEL)      \
+        {                                    \
+            time_t t = time(NULL);           \
+            struct tm *m = localtime(&t);    \
+            char ts[32] = {0};               \
+            strftime(ts, 31, "%H:%M:%S", m); \
+            fprintf(stdout, "[%p %s %s:%d] " format "\n", (void*)pthread_self(), ts, __FILE__, __LINE__, ##__VA_ARGS__);\
+        }\
     }
 #define INF_LOG(format, ...) LOG(INF, format, ##__VA_ARGS__);
 #define DBG_LOG(format, ...) LOG(DBG, format, ##__VA_ARGS__);
@@ -109,7 +109,7 @@ public:
         {
             uint64_t readable = ReadAbleSize();
             std::memmove(Begin(), ReadPos(), readable);
-            /*
+            /* 
              * 这里使用memmove而不使用memcpy或copy
              * “memmove 和 memcpy 的区别在于是否支持内存重叠。在我的 Buffer 实现中，
              * 需要在同一块缓冲区内把可读数据整体前移复用空间，这属于典型的重叠拷贝场景，
@@ -220,6 +220,8 @@ private:
     uint64_t _reader_idx;      // 读指针
     uint64_t _writer_idx;      // 写指针
 };
+
+
 
 // ================================================================
 //                            Socket模块
@@ -392,26 +394,27 @@ public:
     }
 
     // 关闭套接字
-    void Close()
+    bool Close()
     {
-        if (_sockfd != -1)
+        int ret = close(_sockfd);
+        if (ret < 0)
         {
-            close(_sockfd);
-            _sockfd = -1;
+            ERR_LOG("Close ERR");
+            return false;
         }
+        return true;
     }
 
     // 创建服务器监听 socket
     // 顺序：
     //   socket -> nonblock -> reuse addr -> bind -> listen
-    bool CreateServer(uint16_t port, const std::string &ip = "0.0.0.0", bool isBlock = false)
+    bool CreateServer(uint16_t port, const std::string &ip = "0.0.0.0")
     {
         if (!CreateSocket())
             return false;
 
-        if (isBlock)
-            SetNonBlock(); // 非阻塞是 Reactor 的前提
-        ReuseAddress();    // 支持服务器快速重启
+        SetNonBlock();  // 非阻塞是 Reactor 的前提
+        ReuseAddress(); // 支持服务器快速重启
 
         if (!Bind(port, ip))
             return false;
@@ -563,9 +566,6 @@ public:
     // 解决触发事件
     void HandleEvent()
     {
-        if (_event_cb)
-            _event_cb();
-            
         if ((_revents & EPOLLIN) || (_revents & EPOLLRDHUP) || (_revents & EPOLLPRI))
         {
             // 如果通知可读、断开链接、高优先级数据或外带数据
@@ -587,6 +587,9 @@ public:
             if (_close_cb)
                 _close_cb();
         }
+
+        if (_event_cb)
+            _event_cb();
     }
 
 private:
