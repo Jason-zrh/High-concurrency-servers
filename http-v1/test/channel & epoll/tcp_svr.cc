@@ -1,11 +1,11 @@
 #include "../../source/server.hpp"
 
-
+// 设置回调函数
 void HandleClose(Channel* channel)
 {
     std::cout << "Close: " << channel->GetFd() << std::endl;
     channel->Remove();// 移除监控
-    delete channel;
+    close(channel->GetFd());
 }
 
 void HandleRead(Channel* channel)
@@ -16,7 +16,8 @@ void HandleRead(Channel* channel)
     if(ret <= 0)
         return HandleClose(channel);
     
-    channel->EnableWrite(); // 开启对可写事件的监控
+    // 服务器要开始向客户端返回信息，所以要开启对可写事件的监控
+    channel->EnableWrite(); 
     std::cout << recv << std::endl;
 }
 
@@ -45,7 +46,8 @@ void HandleEvent(Channel* channel)
 void Acceptor(Poller* poller, Channel* lis_channel)
 {
     int newfd = accept(lis_channel->GetFd(), nullptr, nullptr);
-    if(newfd < 0) { return; }
+    if(newfd < 0) 
+        return;
 
     // 给获取上来的通信套接字创建channel进行管理
     Channel* channel = new Channel(poller, newfd);
@@ -61,20 +63,22 @@ int main()
 {
     // TCP服务器
     Socket sock;
+    // 构建监听服务器
+    bool ret = sock.CreateServer(8080); // 不是进行通信的fd(是在饭店门口揽客的)
+
     Poller epoll;
-    // Channel管理文件描述符和poller
+    // 管理链接的文件描述符
     Channel channel(&epoll, sock.GetFd());
     // 设置回调函数
     channel.SetReadCallBack(std::bind(Acceptor, &epoll, &channel));
     channel.EnableRead(); // 开始关注该文件描述符的读事件，读事件就绪->获取到新链接了
-    // 构建监听服务器
-    bool ret = sock.CreateServer(8080); // 不是进行通信的fd(是在饭店门口揽客的)
+
     while (1)
     {
        std::vector<Channel* > actives;
        epoll.Poll(&actives);
        for(auto& e : actives)
-        e->HandleEvent();
+            e->HandleEvent();
     }
     sock.Close();
     return 0;
