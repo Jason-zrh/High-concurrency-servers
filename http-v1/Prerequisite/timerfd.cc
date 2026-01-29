@@ -9,7 +9,7 @@
 
 using namespace std;
 
-
+// 
 int main()
 {
     // clockid: CLOCK_REALTIME-系统实时时间，如果修改了系统时间就会出问题；
@@ -25,10 +25,10 @@ int main()
 
     struct itimerspec itime;
     
-    itime.it_value.tv_sec = 3;  // 此处为设置超时时间3s
+    itime.it_value.tv_sec = 1;  // 此处为设置超时时间3s
     itime.it_value.tv_nsec = 0; // 防止纳秒变成随机值设为0
 
-    itime.it_interval.tv_sec = 3; // 第一次超时后，每次超时的间隔时间
+    itime.it_interval.tv_sec = 1; // 第一次超时后，每次超时的间隔时间
     itime.it_interval.tv_nsec = 0;
 
     timerfd_settime(timerfd, 0, &itime, nullptr);
