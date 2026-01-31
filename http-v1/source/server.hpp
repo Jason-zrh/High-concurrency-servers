@@ -1195,3 +1195,331 @@ void TimerWheel::TimerCancel(uint64_t id)
 {
     _loop->RunInLoop(std::bind(&TimerWheel::TimerCancelInLoop, this, id));
 }
+
+// ====================================================================================================
+//                                          Connection模块
+// ====================================================================================================
+
+// ==============================================
+//                   Any类--存上下文的
+// ==============================================
+
+class Connection;
+class Any
+{
+public:
+    Any()
+        : _content(nullptr)
+    {
+    }
+
+    template <class T>
+    Any(const T &val)
+        : _content(new PlaceHolder<T>(val)) // !!!!! 在这里: PlaceHolder = Holder! !!!!!!!
+    {
+    }
+
+    // 拷贝构造
+    Any(const Any &other)
+        : _content(other._content ? other._content->clone() : nullptr)
+    {
+    }
+
+    ~Any()
+    {
+        delete _content;
+    }
+
+    Any &swap(Any &other)
+    {
+        std::swap(_content, other._content);
+        return *this;
+    }
+    // 获取子类对象中保存数据的指针
+    template <class T>
+    T *Get()
+    {
+        assert(typeid(T) == _content->type());
+        return &((PlaceHolder<T> *)_content)->_val;
+    }
+
+    // 赋值运算符重载
+    template <class T>
+    Any &operator=(const T &val)
+    {
+        // 创建临时对象，交换以后自动销毁
+        Any(val).swap(*this);
+        return *this;
+    }
+
+    Any &operator=(const Any &other)
+    {
+        Any(other).swap(*this);
+        return *this;
+    }
+
+private:
+    // 父类
+    class Holder
+    {
+    public:
+        virtual ~Holder() {}
+        virtual const std::type_info &type() = 0; // 纯虚函数, 必须要在子类中实现
+        virtual Holder *clone() = 0;
+    };
+    // 子类
+    template <class T>
+    class PlaceHolder : public Holder // 子类继承父类，那么子类就可以当作一个父类来使用
+    {
+    public:
+        PlaceHolder(const T &val)
+            : _val(val)
+        {
+        }
+
+        virtual const std::type_info &type() // 获取子类对象保存类型
+        {
+            return typeid(T);
+        }
+
+        virtual Holder *clone() // 针对对象自身，克隆出一个新的子类对象
+        {
+            return new PlaceHolder(_val);
+        }
+
+    public:
+        T _val;
+    };
+    Holder *_content;
+};
+
+typedef enum
+{
+    CONNECTED,    // 连接已经建立完成
+    CONNECTING,   // 正在建立连接
+    DISCONNECTED, // 已经断开连接
+    DISCONNECTING // 正在断开连接
+} ConnectState;
+
+using ConnectionPtr = std::shared_ptr<Connection>;
+
+using ConnectedCallBack = std::function<void(const ConnectionPtr &)>;
+using MessageCallBack = std::function<void(const ConnectionPtr &, Buffer *)>;
+using ClosedCallBack = std::function<void(const ConnectionPtr &)>;
+using AnyCallBack = std::function<void(const ConnectionPtr &)>;
+
+class Connection : public std::enable_shared_from_this<Connection>
+{
+public:
+    Connection(EventLoop *loop, uint64_t connect_id, int fd)
+    :_loop(loop)
+    ,_connect_id(connect_id)
+    ,_sockfd(fd)
+    ,_channel(_loop, _sockfd)
+    {
+
+    }
+
+    // 发送数据
+    void Send(char *data, size_t len)
+    {
+    }
+
+    // 提供给组件使用者的关闭接口 -- 并不实际关闭，需要判断有咩有数据待处理
+    void ShutDown()
+    {
+    }
+
+    // 启动非活跃销毁，参数是多长时间无通信销毁
+    void EnableInactiveRealse(int sec)
+    {
+    }
+
+    // 取消非活跃销毁
+    void DisableInactiveRealse()
+    {
+    }
+
+    // 切换协议，重置上下文和阶段性处理函数
+    void UpGrade(/*协议上下文*/ const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
+    {
+    }
+
+    // 获取文件描述符
+    int GetFd()
+    {
+    }
+
+    // 获取id
+    uint64_t GetId()
+    {
+    }
+
+    void Established()
+    {
+    }
+
+    // 返回状态
+    bool IsConnected()
+    {
+    }
+
+    // 设置上下文
+    void SetContext(const Any &context)
+    {
+    }
+
+    // 返回获得上下文
+    Any *GetContext()
+    {
+    }
+
+    void SetConnectCallBack(const ConnectedCallBack &cb)
+    {
+    }
+    void SetMsgCallBack(const MessageCallBack &cb)
+    {
+    }
+    void SetCloseCallBack(const ClosedCallBack &cb)
+    {
+    }
+    void SetAnyCallBack(const AnyCallBack cb)
+    {
+    }
+
+    ~Connection()
+    {
+    }
+
+private:
+    // 保证线程安全啊bro
+    void SendInLoop(char *data, size_t len)
+    {
+    }
+
+    void ShutDownInLoop()
+    {
+    }
+
+    void ReleaseInLoop()
+    {
+    }
+
+    // 连接获取后的状态下需要进行各种设置的状态: 给Channel设置事件回调，启动读监控
+    void EstablishedInLoop()
+    {
+    }
+    void EnableInactiveRealseInLoop(int sec)
+    {
+    }
+
+    void DisableInactiveRealseInLoop()
+    {
+    }
+
+    void UpGradeInLoop(/*协议上下文*/ const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
+    {
+    }
+
+    // Channel的五个回调函数
+    void HandleRead()
+    {
+        // 读取Socket中的数据放到缓冲区
+        char buffer[65536];
+        // 如果socket缓冲区中没有数据可能导致阻塞，所以这里用非阻塞读取
+        ssize_t ret = _socket.NonBlockRecv(buffer, 65535);
+        if (ret < 0) // 出错
+        {
+            // 先检查缓冲区中有没有数据待发送或者待处理数据
+            ShutDownInLoop();
+            return;
+        }
+        else if (ret == 0) // 没有读到数据,不是连接断开
+            return;
+
+        // 将数据放到输入缓冲区
+        _inBuffer.Write(buffer, ret);
+
+        // 调用msg_cb进行业务处理
+        if (_inBuffer.ReadAbleSize() > 0)
+        {
+            // 从自身类型获取shared_ptr对象
+            _msg_cb(shared_from_this(), &_inBuffer);
+            return;
+        }
+    }
+
+    void HandleWrite()
+    {
+
+        // 触发写事件，socket可以发送数据
+        ssize_t ret = _socket.NonBlockSend(_outBuffer.ReadPos(), _outBuffer.ReadAbleSize());
+        if (ret < 0)
+        {
+            if (_inBuffer.ReadAbleSize() > 0)
+            {
+                _msg_cb(shared_from_this(), &_inBuffer);
+            }
+            ReleaseInLoop();
+            return;
+        }
+        else if (ret == 0)
+            return;
+
+        _outBuffer.MoveReadOffset(ret);
+
+        if (_outBuffer.ReadAbleSize() == 0)
+        {
+            _channel.DisableWrite();
+            if (_connectState == DISCONNECTING)
+            {
+                ReleaseInLoop();
+                return;
+            }
+        }
+        return;
+    }
+
+    // 连接一旦挂断，套接字像个无能的丈夫，什么都干不了
+    void HandleClose()
+    {
+        if (_inBuffer.ReadAbleSize() > 0)
+        {
+            _msg_cb(shared_from_this(), &_inBuffer);
+        }
+        ReleaseInLoop();
+    }
+
+    void HandleError()
+    {
+        HandleClose();
+    }
+
+    void HandleEvent()
+    {
+        // 刷新连接的活跃度 - 延迟定时销毁任务
+        if (_enable_inactive_release == true)
+            _loop->TimerRefresh(_connect_id);
+
+        // 调用组件使用者的事件回调
+        if(_any_cb)
+            _any_cb(shared_from_this());
+    }
+
+private:
+    int _sockfd;                   // 关联文件描述符
+    bool _enable_inactive_release; // 是否启动销毁非活跃链接
+    uint64_t _connect_id;          // 连接唯一id -- 为了简化操作，可以同时作为定时器id
+    ConnectState _connectState;    // 链接状态管理
+    Socket _socket;                // 套接字操作管理
+    Channel _channel;              // 连接事件管理
+    Buffer _inBuffer;              // 输入缓冲区
+    Buffer _outBuffer;             // 输出缓冲区
+    Any _context;                  // 管理协议上下文
+    EventLoop *_loop;              // 链接所关联的loop - 关联到线程
+
+    ConnectedCallBack _connect_cb;
+    MessageCallBack _msg_cb;
+    ClosedCallBack _close_cb;
+    AnyCallBack _any_cb;
+};
