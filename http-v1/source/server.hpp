@@ -2,6 +2,7 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
+#include <typeinfo>
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -1058,6 +1059,11 @@ public:
         QueueInLoop(cb);
     }
 
+    void AssertInLoop()
+    {
+        assert(_thread_id == std::this_thread::get_id());
+    }
+
     bool IsInLoop()
     {
         return (_thread_id == std::this_thread::get_id() ? true : false);
@@ -1200,6 +1206,8 @@ void TimerWheel::TimerCancel(uint64_t id)
 //                                          Connection模块
 // ====================================================================================================
 
+
+
 // ==============================================
 //                   Any类--存上下文的
 // ==============================================
@@ -1302,7 +1310,6 @@ typedef enum
 } ConnectState;
 
 using ConnectionPtr = std::shared_ptr<Connection>;
-
 using ConnectedCallBack = std::function<void(const ConnectionPtr &)>;
 using MessageCallBack = std::function<void(const ConnectionPtr &, Buffer *)>;
 using ClosedCallBack = std::function<void(const ConnectionPtr &)>;
@@ -1312,113 +1319,196 @@ class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
     Connection(EventLoop *loop, uint64_t connect_id, int fd)
-    :_loop(loop)
-    ,_connect_id(connect_id)
-    ,_sockfd(fd)
-    ,_channel(_loop, _sockfd)
+        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(_loop, _sockfd), _enable_inactive_release(false), _state(CONNECTING), _socket(_sockfd)
     {
-
+        _channel.SetCloseCallBack(std::bind(&Connection::HandleClose, this));
+        _channel.SetErrorCallBack(std::bind(&Connection::HandleError, this));
+        _channel.SetReadCallBack(std::bind(&Connection::HandleRead, this));
+        _channel.SetEventCallBack(std::bind(&Connection::HandleEvent, this));
+        _channel.SetWriteCallBack(std::bind(&Connection::HandleWrite, this));
     }
 
     // 发送数据
     void Send(char *data, size_t len)
     {
+        _loop->RunInLoop(std::bind(&Connection::SendInLoop, this, data, len));
     }
 
     // 提供给组件使用者的关闭接口 -- 并不实际关闭，需要判断有咩有数据待处理
     void ShutDown()
     {
+        _loop->RunInLoop(std::bind(&Connection::ShutDownInLoop, this));
     }
 
     // 启动非活跃销毁，参数是多长时间无通信销毁
     void EnableInactiveRealse(int sec)
     {
+        _loop->RunInLoop(std::bind(&Connection::EnableInactiveRealseInLoop, this, sec));
     }
 
     // 取消非活跃销毁
     void DisableInactiveRealse()
     {
+        _loop->RunInLoop(std::bind(&Connection::DisableInactiveRealseInLoop, this));
     }
 
-    // 切换协议，重置上下文和阶段性处理函数
-    void UpGrade(/*协议上下文*/ const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
+    // 切换协议，重置上下文和阶段性处理函数 -- 非线程安全的
+    void UpGrade(const Any &context, const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
     {
+        _loop->AssertInLoop();
+        _loop->RunInLoop(std::bind(&Connection::UpGradeInLoop, this, context, conn, msg, close, any));
     }
 
     // 获取文件描述符
     int GetFd()
     {
+        return _sockfd;
     }
 
     // 获取id
     uint64_t GetId()
     {
+        return _connect_id;
     }
 
     void Established()
     {
+        _loop->RunInLoop(std::bind(&Connection::EstablishedInLoop, this));
     }
 
     // 返回状态
     bool IsConnected()
     {
+        return _state == CONNECTED;
     }
 
     // 设置上下文
     void SetContext(const Any &context)
     {
+        _context = context;
     }
 
     // 返回获得上下文
     Any *GetContext()
     {
+        return &_context;
     }
 
     void SetConnectCallBack(const ConnectedCallBack &cb)
     {
+        _connect_cb = cb;
     }
     void SetMsgCallBack(const MessageCallBack &cb)
     {
+        _msg_cb = cb;
     }
     void SetCloseCallBack(const ClosedCallBack &cb)
     {
+        _close_cb = cb;
     }
-    void SetAnyCallBack(const AnyCallBack cb)
+    void SetAnyCallBack(const AnyCallBack &cb)
     {
+        _any_cb = cb;
+    }
+
+    void SetServerCloseCallBack(const ClosedCallBack &cb)
+    {
+        _server_close_cb = cb;
     }
 
     ~Connection()
     {
+        DBG_LOG("Realse Connection");
     }
 
 private:
     // 保证线程安全啊bro
-    void SendInLoop(char *data, size_t len)
+    void SendInLoop(char *data, uint64_t len)
     {
+        // 不是真正发送数据，而是将数据放到发送缓冲区中
+        if (_state == DISCONNECTED)
+            return;
+
+        _outBuffer.Write(data, len);
+
+        if (_channel.WriteAble() == false)
+            _channel.EnableWrite();
     }
 
     void ShutDownInLoop()
     {
+        // 也不是实际释放连接操作, 需要判断还有没有数据待处理和发送
+        _state = DISCONNECTING; // 设置待关闭状态
+        if (_inBuffer.ReadAbleSize() > 0)
+        {
+            if (_msg_cb)
+                _msg_cb(shared_from_this(), &_inBuffer);
+        }
+        if (_outBuffer.ReadAbleSize() > 0)
+        {
+            // 有数据待发送
+            if (_channel.WriteAble() == false)
+                _channel.EnableWrite();
+        }
+
+        if (_outBuffer.ReadAbleSize() > 0)
+            ReleaseInLoop();
     }
 
     void ReleaseInLoop()
     {
+        // 修改链接状态
+        _state = DISCONNECTED;
+        // 移除连接的事件监控
+        _channel.Remove();
+        // 关闭描述符
+        _socket.Close();
+        // 如果定时器中还有定时销毁任务则取消任务
+        if (_loop->HasTimer(_connect_id))
+            DisableInactiveRealseInLoop();
+
+        if (_close_cb)
+            _close_cb(shared_from_this());
+
+        if (_server_close_cb)
+            _server_close_cb(shared_from_this());
     }
 
     // 连接获取后的状态下需要进行各种设置的状态: 给Channel设置事件回调，启动读监控
     void EstablishedInLoop()
     {
+        assert(_state == CONNECTING);
+        _state = CONNECTED;
+        _channel.EnableRead();
+        if (_connect_cb)
+            _connect_cb(shared_from_this());
     }
+
     void EnableInactiveRealseInLoop(int sec)
     {
+        _enable_inactive_release = true;
+        // 添加定时销毁任务, 如果任务已经存在, 则刷新延迟即可, 如果不存在则新增
+        if (_loop->HasTimer(_connect_id) == true)
+            _loop->TimerRefresh(_connect_id);
+        else
+            // 任务不存在，新增任务
+            _loop->TimerAdd(_connect_id, sec, std::bind(&Connection::ReleaseInLoop, this));
     }
 
     void DisableInactiveRealseInLoop()
     {
+        _enable_inactive_release = false;
+        if (_loop->HasTimer(_connect_id) == true)
+            _loop->TimerCancel(_connect_id);
     }
 
-    void UpGradeInLoop(/*协议上下文*/ const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
+    void UpGradeInLoop(const Any &context, const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
     {
+        _context = context;
+        _connect_cb = conn;
+        _msg_cb = msg;
+        _close_cb = close;
+        _any_cb = any;
     }
 
     // Channel的五个回调函数
@@ -1471,7 +1561,7 @@ private:
         if (_outBuffer.ReadAbleSize() == 0)
         {
             _channel.DisableWrite();
-            if (_connectState == DISCONNECTING)
+            if (_state == DISCONNECTING)
             {
                 ReleaseInLoop();
                 return;
@@ -1502,7 +1592,7 @@ private:
             _loop->TimerRefresh(_connect_id);
 
         // 调用组件使用者的事件回调
-        if(_any_cb)
+        if (_any_cb)
             _any_cb(shared_from_this());
     }
 
@@ -1510,7 +1600,7 @@ private:
     int _sockfd;                   // 关联文件描述符
     bool _enable_inactive_release; // 是否启动销毁非活跃链接
     uint64_t _connect_id;          // 连接唯一id -- 为了简化操作，可以同时作为定时器id
-    ConnectState _connectState;    // 链接状态管理
+    ConnectState _state;           // 链接状态管理
     Socket _socket;                // 套接字操作管理
     Channel _channel;              // 连接事件管理
     Buffer _inBuffer;              // 输入缓冲区
@@ -1522,4 +1612,6 @@ private:
     MessageCallBack _msg_cb;
     ClosedCallBack _close_cb;
     AnyCallBack _any_cb;
+    // 移除服务器内部的管理信息
+    ClosedCallBack _server_close_cb;
 };
