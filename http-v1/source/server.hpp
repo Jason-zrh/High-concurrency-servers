@@ -51,19 +51,12 @@
 // ====================================================================================================
 
 #define DEFAULT_BUFFER_SIZE 1024
-
 class Buffer
 {
 public:
     Buffer()
         : _buffer(DEFAULT_BUFFER_SIZE), _reader_idx(0), _writer_idx(0)
     {
-    }
-
-    // 返回底层缓冲区起始地址
-    char *Begin()
-    {
-        return _buffer.data();
     }
 
     // 当前写指针位置
@@ -78,18 +71,6 @@ public:
         return Begin() + _reader_idx;
     }
 
-    // 尾部剩余可写空间大小
-    uint64_t TailIdleSize()
-    {
-        return _buffer.size() - _writer_idx;
-    }
-
-    // 头部已读但尚未复用的空间大小
-    uint64_t HeadIdleSize()
-    {
-        return _reader_idx;
-    }
-
     // 当前可读数据大小
     uint64_t ReadAbleSize()
     {
@@ -99,6 +80,7 @@ public:
     // 向后移动读指针（消费数据）
     void MoveReadOffset(uint64_t len)
     {
+        assert(len <= ReadAbleSize());
         _reader_idx += len;
     }
 
@@ -147,6 +129,24 @@ public:
         }
     }
 
+    // 从缓冲区读取 len 字节到外部缓冲区
+    void Read(void *buf, uint64_t len)
+    {
+        assert(len <= ReadAbleSize());
+        std::copy(ReadPos(), ReadPos() + len, static_cast<char *>(buf));
+        MoveReadOffset(len);
+    }
+
+    // 读取指定长度并以 string 形式返回
+    std::string ReadAsString(uint64_t len)
+    {
+        assert(len <= ReadAbleSize());
+        std::string str;
+        str.resize(len);
+        Read(str.data(), len);
+        return str;
+    }
+
     // 写入任意二进制数据
     void Write(const void *data, uint64_t len)
     {
@@ -163,14 +163,6 @@ public:
         std::copy(d, d + len, WritePos());
 
         MoveWriteOffset(len);
-    }
-
-    // 从缓冲区读取 len 字节到外部缓冲区
-    void Read(void *buf, uint64_t len)
-    {
-        assert(len <= ReadAbleSize());
-        std::copy(ReadPos(), ReadPos() + len, static_cast<char *>(buf));
-        MoveReadOffset(len);
     }
 
     // 写入字符串内容（不包含结尾 '\0'）
@@ -192,16 +184,6 @@ public:
         uint64_t len = data.ReadAbleSize();
         Write(data.ReadPos(), len);
         data.MoveReadOffset(len);
-    }
-
-    // 读取指定长度并以 string 形式返回
-    std::string ReadAsString(uint64_t len)
-    {
-        assert(len <= ReadAbleSize());
-        std::string str;
-        str.resize(len);
-        Read(&str[0], len);
-        return str;
     }
 
     // 查找当前可读区中的 '\n'
@@ -228,6 +210,26 @@ public:
     }
 
     ~Buffer() {}
+
+    // 私有实现接口
+private:
+    // 返回底层缓冲区起始地址
+    char *Begin()
+    {
+        return _buffer.data();
+    }
+
+    // 尾部剩余可写空间大小
+    uint64_t TailIdleSize()
+    {
+        return _buffer.size() - _writer_idx;
+    }
+
+    // 头部已读但尚未复用的空间大小
+    uint64_t HeadIdleSize()
+    {
+        return _reader_idx;
+    }
 
 private:
     std::vector<char> _buffer; // 实际存储空间
@@ -338,7 +340,7 @@ public:
 
         socklen_t len = sizeof(server);
         int ret = connect(_sockfd, (const sockaddr *)&server, len);
-        if (ret < 0)
+        if (ret < 0 && errno != EINPROGRESS)
         {
             ERR_LOG("Connect ERR");
             return false;
@@ -417,7 +419,7 @@ public:
 
     // 创建服务器监听 socket
     // 顺序：
-    //   socket -> nonblock -> reuse addr -> bind -> listen
+    // socket -> nonblock -> reuse addr -> bind -> listen
     bool CreateServer(uint16_t port, const std::string &ip = "0.0.0.0", bool isBlock = true)
     {
         if (!CreateSocket())
@@ -469,7 +471,7 @@ public:
     // RAII：对象析构时关闭 fd
     ~Socket()
     {
-        if (_sockfd > 0)
+        if (_sockfd != -1)
             Close();
     }
 
@@ -1206,8 +1208,6 @@ void TimerWheel::TimerCancel(uint64_t id)
 //                                          Connection模块
 // ====================================================================================================
 
-
-
 // ==============================================
 //                   Any类--存上下文的
 // ==============================================
@@ -1331,7 +1331,10 @@ public:
     // 发送数据
     void Send(char *data, size_t len)
     {
-        _loop->RunInLoop(std::bind(&Connection::SendInLoop, this, data, len));
+        // 这里的data可能是外部临时变量，该任务被压入任务队列，如果外部空间释放会导致空指针引用
+        Buffer buf;
+        buf.Write(data, len);
+        _loop->RunInLoop(std::bind(&Connection::SendInLoop, this, buf));
     }
 
     // 提供给组件使用者的关闭接口 -- 并不实际关闭，需要判断有咩有数据待处理
@@ -1423,13 +1426,13 @@ public:
 
 private:
     // 保证线程安全啊bro
-    void SendInLoop(char *data, uint64_t len)
+    void SendInLoop(Buffer buf)
     {
         // 不是真正发送数据，而是将数据放到发送缓冲区中
         if (_state == DISCONNECTED)
             return;
 
-        _outBuffer.Write(data, len);
+        _outBuffer.WriteBuffer(buf);
 
         if (_channel.WriteAble() == false)
             _channel.EnableWrite();
