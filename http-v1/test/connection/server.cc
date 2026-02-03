@@ -1,72 +1,47 @@
 #include "../../source/server.hpp"
 
+// 用于管理新的连接
+std::unordered_map<uint64_t, ConnectionPtr> _conns;
+u_int64_t connect_id = 0;
 
-// 设置回调函数
-void HandleClose(Channel* channel)
+void OnMessage(const ConnectionPtr &conn, Buffer *buf)
 {
-    std::cout << "Close: " << channel->GetFd() << std::endl;
-    channel->Remove();// 移除监控
-    delete channel;
+    std::string msg = buf->ReadAsString(buf->ReadAbleSize());
+    DBG_LOG("%s", msg.c_str());
+
+    std::string str = "Hello Tiktok!";
+    conn->Send(str.c_str(), str.size());
 }
 
-void HandleRead(Channel* channel)
+void OnConnected(const ConnectionPtr &conn)
 {
-    int fd = channel->GetFd();
-    char buf[1024] = {0};
-    int ret = recv(fd, buf, sizeof(buf), 0);
-    if(ret <= 0)
-        return HandleClose(channel);
-    
-    // 服务器要开始向客户端返回信息，所以要开启对可写事件的监控
-    std::cout << buf << std::endl;
-    channel->EnableWrite(); 
+    DBG_LOG("New Connection: %p", conn.get());
 }
 
-void HandleWrite(Channel* channel)
+void ConnectionDestory(const ConnectionPtr &conn)
 {
-    const char* buf = "To ByteDance !!!";
-    // 修改处：只发送有效字符串长度，不发送后面的 \0 填充
-    // 如果需要包含结尾的 \0，可以使用 strlen(buf) + 1，但在网络文本传输中通常不发 \0
-    int len = strlen(buf); 
-    int ret = send(channel->GetFd(), buf, len, 0); 
-    
-    if(ret <= 0)
-        return HandleClose(channel);
-    
-    channel->DisableWrite();
-}
-
-void HandleError(Channel* channel)
-{
-    return HandleClose(channel);
-}
-
-// 刷新定时任务
-void HandleEvent(EventLoop* loop, Channel* channel, uint64_t id)
-{   
-    loop->TimerRefresh(id);
-    std::cout << "Refresh Connection" << std::endl;
+    _conns.erase(conn->GetId());
 }
 
 // 设置监听服务器的读回调，实际上就是获取链接
-void Acceptor(EventLoop* loop, Channel* lis_channel)
+void Acceptor(EventLoop *loop, Channel *lis_channel)
 {
     int newfd = accept(lis_channel->GetFd(), nullptr, nullptr);
-    if(newfd < 0) 
+    if (newfd < 0)
         return;
 
     // 给获取上来的通信套接字创建channel进行管理
-    int timerid = rand() % 10000;
-    Channel* channel = new Channel(loop, newfd);
-    channel->SetReadCallBack(std::bind(HandleRead, channel));
-    channel->SetWriteCallBack(std::bind(HandleWrite, channel));
-    channel->SetErrorCallBack(std::bind(HandleError, channel));
-    channel->SetCloseCallBack(std::bind(HandleClose, channel));
-    channel->SetEventCallBack(std::bind(HandleEvent, loop, channel, timerid));
+    connect_id++;
+    ConnectionPtr conn(new Connection(loop, connect_id, newfd));
+    conn->SetServerCloseCallBack(std::bind(ConnectionDestory, std::placeholders::_1));
+    conn->SetConnectCallBack(std::bind(OnConnected, std::placeholders::_1));
+    conn->SetMsgCallBack(std::bind(OnMessage, std::placeholders::_1, std::placeholders::_2));
 
-    // 给新的文件描述符添加定时任务
-    loop->TimerAdd(timerid, 10, std::bind(HandleClose, channel));
-    channel->EnableRead();
+    // 启动非活跃销毁
+    conn->EnableInactiveRealse(10);
+    conn->Established();
+
+    _conns.insert(std::make_pair(connect_id, conn));
 }
 
 int main()

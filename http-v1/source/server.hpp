@@ -92,43 +92,6 @@ public:
         _writer_idx += len;
     }
 
-    // 确保至少有 len 字节可写空间
-    // 优先复用头部空间，其次进行扩容
-    void EnsureWriteSpace(uint64_t len)
-    {
-        // 尾部空间足够，直接写
-        if (len <= TailIdleSize())
-            return;
-
-        // 通过前移可读数据复用空间
-        if (len <= TailIdleSize() + HeadIdleSize())
-        {
-            uint64_t readable = ReadAbleSize();
-            std::memmove(Begin(), ReadPos(), readable);
-            /*
-             * 这里使用memmove而不使用memcpy或copy
-             * “memmove 和 memcpy 的区别在于是否支持内存重叠。在我的 Buffer 实现中，
-             * 需要在同一块缓冲区内把可读数据整体前移复用空间，这属于典型的重叠拷贝场景，
-             * 所以必须使用 memmove，否则行为是未定义的。”
-             */
-            _reader_idx = 0;
-            _writer_idx = readable;
-        }
-        else
-        {
-            // 扩容：采用倍增策略，减少频繁 realloc
-            uint64_t new_size = _buffer.size();
-            uint64_t need_size = _writer_idx + len;
-
-            while (new_size < need_size)
-            {
-                new_size *= 2;
-            }
-
-            _buffer.resize(new_size);
-        }
-    }
-
     // 从缓冲区读取 len 字节到外部缓冲区
     void Read(void *buf, uint64_t len)
     {
@@ -143,7 +106,7 @@ public:
         assert(len <= ReadAbleSize());
         std::string str;
         str.resize(len);
-        Read(str.data(), len);
+        Read(&str[0], len);
         return str;
     }
 
@@ -186,7 +149,8 @@ public:
         data.MoveReadOffset(len);
     }
 
-    // 查找当前可读区中的 '\n'
+    // [NOTE] FindCRLF 实际查找的是 '\n'，并非严格的 "\r\n"
+    // 教学代码中通常简化为按行（line-based）处理
     char *FindCRLF()
     {
         void *res = memchr(ReadPos(), '\n', ReadAbleSize());
@@ -209,9 +173,47 @@ public:
         _writer_idx = 0;
     }
 
-    ~Buffer() {}
+    // 确保至少有 len 字节可写空间
+    // 优先复用头部空间，其次进行扩容
+    void EnsureWriteSpace(uint64_t len)
+    {
+        // 尾部空间足够，直接写
+        if (len <= TailIdleSize())
+            return;
 
-    // 私有实现接口
+        // 通过前移可读数据复用空间
+        if (len <= TailIdleSize() + HeadIdleSize())
+        {
+            uint64_t readable = ReadAbleSize();
+            std::memmove(Begin(), ReadPos(), readable);
+            /*
+             * 这里使用memmove而不使用memcpy或copy
+             * “memmove 和 memcpy 的区别在于是否支持内存重叠。在我的 Buffer 实现中，
+             * 需要在同一块缓冲区内把可读数据整体前移复用空间，这属于典型的重叠拷贝场景，
+             * 所以必须使用 memmove，否则行为是未定义的。”
+             */
+            _reader_idx = 0;
+            _writer_idx = readable;
+        }
+        else
+        {
+            // 扩容：采用倍增策略，减少频繁 realloc
+            uint64_t new_size = _buffer.size();
+            uint64_t need_size = _writer_idx + len;
+
+            while (new_size < need_size)
+            {
+                new_size *= 2;
+            }
+
+            _buffer.resize(new_size);
+        }
+    }
+
+    ~Buffer()
+    {
+    }
+
 private:
     // 返回底层缓冲区起始地址
     char *Begin()
@@ -220,13 +222,13 @@ private:
     }
 
     // 尾部剩余可写空间大小
-    uint64_t TailIdleSize()
+    uint64_t TailIdleSize() const
     {
         return _buffer.size() - _writer_idx;
     }
 
     // 头部已读但尚未复用的空间大小
-    uint64_t HeadIdleSize()
+    uint64_t HeadIdleSize() const
     {
         return _reader_idx;
     }
@@ -240,6 +242,7 @@ private:
 // ====================================================================================================
 //                                              Socket模块
 // ====================================================================================================
+
 #define MAX_LISTEN 1024
 
 // Socket：对 TCP socket 的最小、正确、非阻塞封装
@@ -313,21 +316,24 @@ public:
     // 返回值：
     //   >=0 : 新连接 fd
     //   -1  : 当前无可 accept 的连接（EAGAIN / EINTR），或系统错误
+    // [FIX-1] EINTR 应重试 accept，而不是直接返回
     int Accept()
     {
-        // 非阻塞 listen fd 下，accept 可能频繁返回 EAGAIN
-        int fd = accept(_sockfd, nullptr, nullptr);
-        if (fd < 0)
+        while (true)
         {
-            // 非异常情况：当前无连接或被信号中断
-            if (errno == EAGAIN || errno == EINTR)
-                return -1;
+            int fd = accept(_sockfd, nullptr, nullptr);
+            if (fd >= 0)
+                return fd;
 
-            // 真正的系统错误
+            if (errno == EINTR)
+                continue; // 被信号打断，重试
+
+            if (errno == EAGAIN)
+                return -1; // 当前无连接（非阻塞正常情况）
+
             ERR_LOG("Accept ERR");
             return -1;
         }
-        return fd;
     }
 
     // 客户端主动发起连接
@@ -351,24 +357,27 @@ public:
     // 接收数据
     // 返回值语义（与 muduo 对齐）：
     //   >0 : 实际读取的字节数
-    //    0 : 对端关闭连接，或当前不可读（EAGAIN / EINTR）
-    //   -1 : 发生系统错误
+    //    0 : 对端关闭连接
+    //   -1 : 发生系统错误，或当前不可读（EAGAIN / EINTR）
+    // [FIX-2] 明确区分“对端关闭”和“当前不可读”
     ssize_t Recv(void *buf, size_t len, int flag = 0)
     {
         ssize_t ret = recv(_sockfd, buf, len, flag);
         if (ret < 0)
         {
-            // 非阻塞下的正常情况
-            if (errno == EINTR || errno == EAGAIN)
-                return 0;
+            if (errno == EINTR)
+                return 0; // 重试即可，上层不当作关闭
+
+            if (errno == EAGAIN)
+                return 0; // 当前无数据（非阻塞正常）
 
             ERR_LOG("Recv ERR");
             return -1;
         }
 
-        // ret == 0 表示对端发送 FIN，连接关闭
         if (ret == 0)
         {
+            // [NOTE] 只有 ret==0 才是对端关闭
             INF_LOG("Peer Closed");
             return 0;
         }
@@ -389,6 +398,8 @@ public:
     //   -1 : 发送错误
     ssize_t Send(void *buf, size_t len, int flag = 0)
     {
+        // 防止SIGPIPE
+        flag |= MSG_NOSIGNAL;
         ssize_t ret = send(_sockfd, buf, len, flag);
         if (ret < 0)
         {
@@ -460,6 +471,11 @@ public:
     void SetNonBlock()
     {
         int fl = fcntl(_sockfd, F_GETFL, 0);
+        if (fl < 0)
+        {
+            ERR_LOG("F_GETFL ERR");
+            return;
+        }
         fcntl(_sockfd, F_SETFL, fl | O_NONBLOCK);
     }
 
@@ -483,6 +499,10 @@ private:
 //                                                  Channel模块
 // ====================================================================================================
 
+// Channel模块是对一个描述符需要进行的IO事件管理的模块
+// 实现对描述符可读，可写，错误...事件的管理操作，
+// 以及Poller模块对描述符进行IO事件监控就绪后，根据不同的事件，回调不同的处理函数功能。
+
 // 事件的回调函数
 class EventLoop;
 class Poller;
@@ -494,11 +514,9 @@ public:
     // 创建一个channel类
     Channel(EventLoop *loop, int fd)
         : _loop(loop), _fd(fd), _events(0), _revents(0)
-    {
-    }
+    { }
     ~Channel()
-    {
-    }
+    { }
     // 更新
     void Update();
     // 移除监控(从epoll的红黑树上删除掉)
@@ -586,20 +604,14 @@ public:
         if (_event_cb)
             _event_cb();
 
-        // 错误和关闭优先处理
+        bool error = false;
+        bool closed = false;
+
         if (_revents & EPOLLERR)
-        {
-            if (_error_cb)
-                _error_cb();
-            return;
-        }
+            error = true;
 
         if (_revents & EPOLLHUP)
-        {
-            if (_close_cb)
-                _close_cb();
-            return;
-        }
+            closed = true;
 
         // 可读事件
         if (_revents & (EPOLLIN | EPOLLPRI))
@@ -614,13 +626,27 @@ public:
             if (_write_cb)
                 _write_cb();
         }
+
+        // 错误 / 关闭最后处理
+        if (error)
+        {
+            if (_error_cb)
+                _error_cb();
+        }
+        else if (closed)
+        {
+            if (_close_cb)
+                _close_cb();
+        }
     }
 
 private:
     int _fd;
     EventLoop *_loop;
-    uint32_t _events;        // 需要监控的事件
-    uint32_t _revents;       // 实际就绪的事件
+    uint32_t _events;  // 需要监控的事件
+    uint32_t _revents; // 实际就绪的事件
+
+    // 事件就绪后的回调函数
     EventCallBack _read_cb;  // 可写
     EventCallBack _write_cb; // 可读
     EventCallBack _error_cb; // 错误产生
@@ -1329,7 +1355,7 @@ public:
     }
 
     // 发送数据
-    void Send(char *data, size_t len)
+    void Send(const char *data, size_t len)
     {
         // 这里的data可能是外部临时变量，该任务被压入任务队列，如果外部空间释放会导致空指针引用
         Buffer buf;
@@ -1454,7 +1480,7 @@ private:
                 _channel.EnableWrite();
         }
 
-        if (_outBuffer.ReadAbleSize() > 0)
+        if (_outBuffer.ReadAbleSize() == 0)
             ReleaseInLoop();
     }
 
@@ -1611,6 +1637,7 @@ private:
     Any _context;                  // 管理协议上下文
     EventLoop *_loop;              // 链接所关联的loop - 关联到线程
 
+    // 业务处理
     ConnectedCallBack _connect_cb;
     MessageCallBack _msg_cb;
     ClosedCallBack _close_cb;
