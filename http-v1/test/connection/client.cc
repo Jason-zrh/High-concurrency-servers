@@ -8,8 +8,8 @@ int main()
 
     for (int i = 0; i < 5; i++)
     {
-        char* msg = "Hello muduo";
-        sock.Send(msg, sizeof(msg));   // ★ 不能用 sizeof
+        char msg[] = "Hello muduo";
+        sock.Send(msg, strlen(msg));   // ★ 不能用 sizeof
 
         char recvbuf[1024] = {0};
         int n = sock.Recv(recvbuf, sizeof(recvbuf) - 1);
