@@ -21,7 +21,10 @@ int main()
 
         sleep(1);
     }
-
+    while(1)
+    {
+        sleep(1);
+    }
     sock.Close();   // ★ 主动关闭，触发服务器 close 回调
     return 0;
 }

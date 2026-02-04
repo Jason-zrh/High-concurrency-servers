@@ -27,7 +27,7 @@ void ConnectionDestory(const ConnectionPtr &conn)
 // 接收新连接
 void Acceptor(EventLoop *loop, Channel *lis_channel)
 {
-    while (true)   // ★ 一次性 accept 干净（ET/LT 都安全）
+    while (true) // ★ 一次性 accept 干净（ET/LT 都安全）
     {
         int newfd = accept(lis_channel->GetFd(), nullptr, nullptr);
         if (newfd < 0)
@@ -57,7 +57,7 @@ int main()
     Socket sock;
     EventLoop loop;
 
-    bool ret = sock.CreateServer(8080);
+    bool ret = sock.CreateServer(8080, "0.0.0.0", false);
     assert(ret);
 
     Channel channel(&loop, sock.GetFd());

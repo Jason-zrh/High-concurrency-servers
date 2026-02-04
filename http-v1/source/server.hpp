@@ -365,11 +365,8 @@ public:
         ssize_t ret = recv(_sockfd, buf, len, flag);
         if (ret < 0)
         {
-            if (errno == EINTR)
-                return 0; // 重试即可，上层不当作关闭
-
-            if (errno == EAGAIN)
-                return 0; // 当前无数据（非阻塞正常）
+            if (errno == EINTR || errno == EAGAIN)
+                return -1; // 当前无数据（非阻塞正常）
 
             ERR_LOG("Recv ERR");
             return -1;
@@ -1114,8 +1111,8 @@ public:
     {
         // 如果这个任务执行与当前线程相同，直接执行
         if (IsInLoop())
-             return cb();
-             
+            return cb();
+
         return QueueInLoop(cb);
     }
 
@@ -1378,7 +1375,7 @@ class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
     Connection(EventLoop *loop, uint64_t connect_id, int fd)
-        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(loop, _sockfd), _enable_inactive_release(false), _state(CONNECTING), _socket(_sockfd)
+        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(loop, fd), _enable_inactive_release(false), _state(CONNECTING), _socket(fd)
     {
         _channel.SetCloseCallBack(std::bind(&Connection::HandleClose, this));
         _channel.SetErrorCallBack(std::bind(&Connection::HandleError, this));
@@ -1578,26 +1575,44 @@ private:
     {
         // 读取Socket中的数据放到缓冲区
         char buffer[65536];
-        // 如果socket缓冲区中没有数据可能导致阻塞，所以这里用非阻塞读取
-        ssize_t ret = _socket.NonBlockRecv(buffer, 65535);
-        if (ret < 0) // 出错
+        bool peer_closed = false;
+
+        while (true)
         {
-            // 先检查缓冲区中有没有数据待发送或者待处理数据
-            ShutDownInLoop();
+            // 如果socket缓冲区中没有数据可能导致阻塞，所以这里用非阻塞读取
+            ssize_t ret = _socket.NonBlockRecv(buffer, sizeof(buffer));
+            if (ret > 0)
+            {
+                _inBuffer.Write(buffer, ret);
+                continue;
+            }
+
+            if (ret == 0)
+            {
+                peer_closed = true;
+                break;
+            }
+
+            if (errno == EAGAIN || errno == EINTR)
+                break;
+
+            // 发生错误
+            HandleClose();
             return;
         }
-        else if (ret == 0) // 没有读到数据,不是连接断开
-            return;
 
         // 将数据放到输入缓冲区
-        _inBuffer.Write(buffer, ret);
+        if (peer_closed)
+        {
+            HandleClose();
+            return;
+        }
 
         // 调用msg_cb进行业务处理
         if (_inBuffer.ReadAbleSize() > 0)
         {
-            // 从自身类型获取shared_ptr对象
-            _msg_cb(shared_from_this(), &_inBuffer);
-            return;
+            if (_msg_cb)
+                _msg_cb(shared_from_this(), &_inBuffer);
         }
     }
 
@@ -1677,4 +1692,4 @@ private:
     AnyCallBack _any_cb;
     // 移除服务器内部的管理信息
     ClosedCallBack _server_close_cb;
-};  
+};
