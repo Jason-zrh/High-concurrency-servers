@@ -1378,7 +1378,7 @@ class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
     Connection(EventLoop *loop, uint64_t connect_id, int fd)
-        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(_loop, _sockfd), _enable_inactive_release(false), _state(CONNECTING), _socket(_sockfd)
+        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(loop, _sockfd), _enable_inactive_release(false), _state(CONNECTING), _socket(_sockfd)
     {
         _channel.SetCloseCallBack(std::bind(&Connection::HandleClose, this));
         _channel.SetErrorCallBack(std::bind(&Connection::HandleError, this));

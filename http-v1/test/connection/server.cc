@@ -57,7 +57,7 @@ int main()
     Socket sock;
     EventLoop loop;
 
-    bool ret = sock.CreateServer(8080);
+    bool ret = sock.CreateServer(8080, "0.0.0.0", false);
     assert(ret);
 
     Channel channel(&loop, sock.GetFd());
