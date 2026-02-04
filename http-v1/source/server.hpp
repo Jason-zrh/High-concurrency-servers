@@ -734,7 +734,7 @@ public:
         {
             auto it = _channels.find(_evs[i].data.fd);
             if (it == _channels.end())
-                continue;        // 忽略已被移除的 fd
+                continue; // 忽略已被移除的 fd
             it->second->SetRevents(_evs[i].events);
             active->push_back(it->second);
         }
@@ -851,7 +851,8 @@ public:
             _task_cb();
 
         // 通知时间轮移除该任务对应的 weak_ptr 索引
-        _release_cb();
+        if (_release_cb)
+            _release_cb();
     }
 
     /*
@@ -1094,26 +1095,28 @@ public:
     // 启动eventloop
     void Start()
     {
-        std::vector<Channel *> actives;
-        // 事件监控
-        _poll.Poll(&actives);
+        while (1)
+        {
+            std::vector<Channel *> actives;
+            // 事件监控
+            _poll.Poll(&actives);
 
-        // 事件处理
-        for (auto &ch : actives)
-            ch->HandleEvent();
+            // 事件处理
+            for (auto &ch : actives)
+                ch->HandleEvent();
 
-        // 执行任务(将任务队列中的任务全部执行一次)
-        RunAllTasks();
+            // 执行任务(将任务队列中的任务全部执行一次)
+            RunAllTasks();
+        }
     }
 
     void RunInLoop(const Functor &cb)
     {
         // 如果这个任务执行与当前线程相同，直接执行
         if (IsInLoop())
-            cb();
-
-        // 线程不同，将任务压入任务队列
-        QueueInLoop(cb);
+             return cb();
+             
+        return QueueInLoop(cb);
     }
 
     void AssertInLoop()
@@ -1364,6 +1367,7 @@ typedef enum
     DISCONNECTING // 正在断开连接
 } ConnectState;
 
+// 业务回调
 using ConnectionPtr = std::shared_ptr<Connection>;
 using ConnectedCallBack = std::function<void(const ConnectionPtr &)>;
 using MessageCallBack = std::function<void(const ConnectionPtr &, Buffer *)>;
@@ -1532,7 +1536,7 @@ private:
             _server_close_cb(shared_from_this());
     }
 
-    // 连接获取后的状态下需要进行各种设置的状态: 给Channel设置事件回调，启动读监控
+    // 连接获取后的状态下需要进行各种设置的状态: 设置事件回调，启动读监控
     void EstablishedInLoop()
     {
         assert(_state == CONNECTING);
@@ -1673,4 +1677,4 @@ private:
     AnyCallBack _any_cb;
     // 移除服务器内部的管理信息
     ClosedCallBack _server_close_cb;
-};
+};  

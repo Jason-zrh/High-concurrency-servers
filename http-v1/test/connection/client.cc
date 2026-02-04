@@ -1,29 +1,27 @@
 #include "../../source/server.hpp"
 
-
 int main()
 {
     Socket sock;
-    sock.CreateClient(8080, "111.229.73.240");
+    bool ret = sock.CreateClient(8080, "127.0.0.1");
+    assert(ret);
 
-    for(int i = 0; i < 5; i++)
+    for (int i = 0; i < 5; i++)
     {
-        char buffer[1024] = "Hello muduo!";
-        sock.Send(buffer, sizeof(buffer));
+        char* msg = "Hello muduo";
+        sock.Send(msg, sizeof(msg));   // ★ 不能用 sizeof
 
-        char recv[1024] = {0};
-        int n = sock.Recv(recv, sizeof(recv) - 1);
+        char recvbuf[1024] = {0};
+        int n = sock.Recv(recvbuf, sizeof(recvbuf) - 1);
+        if (n > 0)
+        {
+            recvbuf[n] = 0;
+            std::cout << "Server reply: " << recvbuf << std::endl;
+        }
 
-        
-        recv[n] = 0;
-        std::cout << recv << std::endl;
         sleep(1);
     }
 
-    while(1)
-    {
-        sleep(1);
-    }
-
+    sock.Close();   // ★ 主动关闭，触发服务器 close 回调
     return 0;
 }

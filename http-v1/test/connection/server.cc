@@ -2,12 +2,12 @@
 
 // 用于管理新的连接
 std::unordered_map<uint64_t, ConnectionPtr> _conns;
-u_int64_t connect_id = 0;
+uint64_t connect_id = 0;
 
 void OnMessage(const ConnectionPtr &conn, Buffer *buf)
 {
     std::string msg = buf->ReadAsString(buf->ReadAbleSize());
-    DBG_LOG("%s", msg.c_str());
+    DBG_LOG("Recv: %s", msg.c_str());
 
     std::string str = "Hello Tiktok!";
     conn->Send(str.c_str(), str.size());
@@ -15,53 +15,57 @@ void OnMessage(const ConnectionPtr &conn, Buffer *buf)
 
 void OnConnected(const ConnectionPtr &conn)
 {
-    DBG_LOG("New Connection: %p", conn.get());
+    DBG_LOG("New Connection id=%lu fd=%d", conn->GetId(), conn->GetFd());
 }
 
 void ConnectionDestory(const ConnectionPtr &conn)
 {
+    DBG_LOG("Connection Destroy id=%lu", conn->GetId());
     _conns.erase(conn->GetId());
 }
 
-// 设置监听服务器的读回调，实际上就是获取链接
+// 接收新连接
 void Acceptor(EventLoop *loop, Channel *lis_channel)
 {
-    int newfd = accept(lis_channel->GetFd(), nullptr, nullptr);
-    if (newfd < 0)
-        return;
+    while (true)   // ★ 一次性 accept 干净（ET/LT 都安全）
+    {
+        int newfd = accept(lis_channel->GetFd(), nullptr, nullptr);
+        if (newfd < 0)
+        {
+            if (errno == EAGAIN || errno == EINTR)
+                break;
+            ERR_LOG("accept error");
+            break;
+        }
 
-    // 给获取上来的通信套接字创建channel进行管理
-    connect_id++;
-    ConnectionPtr conn(new Connection(loop, connect_id, newfd));
-    conn->SetServerCloseCallBack(std::bind(ConnectionDestory, std::placeholders::_1));
-    conn->SetConnectCallBack(std::bind(OnConnected, std::placeholders::_1));
-    conn->SetMsgCallBack(std::bind(OnMessage, std::placeholders::_1, std::placeholders::_2));
+        connect_id++;
+        ConnectionPtr conn(new Connection(loop, connect_id, newfd));
 
-    // 启动非活跃销毁
-    conn->EnableInactiveRealse(10);
-    conn->Established();
+        conn->SetServerCloseCallBack(ConnectionDestory);
+        conn->SetConnectCallBack(OnConnected);
+        conn->SetMsgCallBack(OnMessage);
 
-    _conns.insert(std::make_pair(connect_id, conn));
+        conn->EnableInactiveRealse(10);
+        conn->Established();
+
+        _conns.emplace(connect_id, conn);
+    }
 }
 
 int main()
 {
-    srand(time(NULL));
-    // TCP服务器
     Socket sock;
     EventLoop loop;
-    // 构建监听服务器
-    bool ret = sock.CreateServer(8080); // 不是进行通信的fd(是在饭店门口揽客的)
-    // 管理链接的文件描述符
-    Channel channel(&loop, sock.GetFd());
-    // 设置回调函数
-    channel.SetReadCallBack(std::bind(Acceptor, &loop, &channel));
-    channel.EnableRead(); // 开始关注该文件描述符的读事件，读事件就绪->获取到新链接了
 
-    while (1)
-    {
-        loop.Start();
-    }
+    bool ret = sock.CreateServer(8080);
+    assert(ret);
+
+    Channel channel(&loop, sock.GetFd());
+    channel.SetReadCallBack(std::bind(Acceptor, &loop, &channel));
+    channel.EnableRead();
+
+    // ★ EventLoop 自己内部是 while(looping)
+    loop.Start();
 
     sock.Close();
     return 0;
