@@ -514,9 +514,11 @@ public:
     // 创建一个channel类
     Channel(EventLoop *loop, int fd)
         : _loop(loop), _fd(fd), _events(0), _revents(0)
-    { }
+    {
+    }
     ~Channel()
-    { }
+    {
+    }
     // 更新
     void Update();
     // 移除监控(从epoll的红黑树上删除掉)
@@ -675,15 +677,28 @@ public:
     // 更新一个事件的监控事件或着将一个事件添加到监控中
     void UpdateEvent(Channel *channel)
     {
-        bool ret = IsExist(channel);
-        if (ret)
-            // 存在，进行修改更新
-            return Update(channel, EPOLL_CTL_MOD);
+        int fd = channel->GetFd();
+        uint32_t events = channel->GetEvent();
+
+        bool exist = IsExist(channel);
+
+        // epoll不允许内核监控一个文件描述符但是不关心事件
+        if (events == 0)
+        {
+            if (exist)
+            {
+                _channels.erase(fd);
+                Update(channel, EPOLL_CTL_DEL);
+            }
+            return;
+        }
+
+        if (exist)
+            Update(channel, EPOLL_CTL_MOD);
         else
         {
-            // 不存在直接添加
-            _channels[channel->GetFd()] = channel;
-            return Update(channel, EPOLL_CTL_ADD);
+            _channels[fd] = channel;
+            Update(channel, EPOLL_CTL_ADD);
         }
     }
 
@@ -691,9 +706,10 @@ public:
     void RemoveEvent(Channel *channel)
     {
         auto it = _channels.find(channel->GetFd());
-        if (it != _channels.end())
-            _channels.erase(channel->GetFd());
+        if (it == _channels.end())
+            return;
 
+        _channels.erase(channel->GetFd());
         Update(channel, EPOLL_CTL_DEL);
     }
 
@@ -717,7 +733,8 @@ public:
         for (int i = 0; i < nfds; i++)
         {
             auto it = _channels.find(_evs[i].data.fd);
-            assert(it != _channels.end());
+            if (it == _channels.end())
+                continue;        // 忽略已被移除的 fd
             it->second->SetRevents(_evs[i].events);
             active->push_back(it->second);
         }
@@ -729,16 +746,28 @@ public:
     }
 
 private:
-    void Update(Channel *channel, int op) // epoll_ctl对epoll的直接操作
+    // [FIX-1] EPOLL_CTL_DEL 时，event 参数必须为 nullptr
+    void Update(Channel *channel, int op)
     {
-        // int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+        int fd = channel->GetFd();
+
+        if (op == EPOLL_CTL_DEL)
+        {
+            if (epoll_ctl(_epfd, EPOLL_CTL_DEL, fd, nullptr) < 0)
+            {
+                ERR_LOG("Epoll_ctl DEL error: %s", strerror(errno));
+            }
+            return;
+        }
+
         epoll_event ev;
         ev.events = channel->GetEvent();
-        ev.data.fd = channel->GetFd();
-        int ret = epoll_ctl(_epfd, op, channel->GetFd(), &ev);
-        if (ret < 0)
-            ERR_LOG("Epoll_ctl error: %s", strerror(errno));
-        return;
+        ev.data.fd = fd;
+
+        if (epoll_ctl(_epfd, op, fd, &ev) < 0)
+        {
+            ERR_LOG("Epoll_ctl ADD/MOD error: %s", strerror(errno));
+        }
     }
 
     // 判断一个channel是否已经添加了事件的监控(是否已经管理)
