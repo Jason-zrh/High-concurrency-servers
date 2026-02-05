@@ -1693,3 +1693,63 @@ private:
     // 移除服务器内部的管理信息
     ClosedCallBack _server_close_cb;
 };
+
+
+// ====================================================================================================
+//                                          Acceptor模块
+// ====================================================================================================
+
+
+// 用于管理监听套接字进行管理
+// 1.创建一个监听套接字
+// 2.启动读事件监控
+// 3.事件触发后获取新链接
+using AcceptCallBack = std::function<void(int)>;
+
+class Acceptor
+{
+public:
+    Acceptor(EventLoop* loop, uint16_t port)
+    :_socket(CreateServer(port))
+    ,_loop(loop)
+    ,_channel(loop, _socket.GetFd())
+    { 
+        _channel.SetReadCallBack(std::bind(&Acceptor::HandleRead, this));
+        // _channel.EnableRead(); 启动读事件监控不可以在设置回调之前
+    }   
+    
+    void Listen()
+    {
+        _channel.EnableRead();
+    }
+
+    void SetAcceptCallBack(const AcceptCallBack& cb)
+    {
+        _accept_callback = cb;
+    }
+
+private:
+    // 获取新连接，调用回调函数
+    void HandleRead()
+    {
+        int newfd = _socket.Accept();
+        if(newfd < 0)
+            return;
+        if(_accept_callback)
+            _accept_callback(newfd);
+    }
+
+    int CreateServer(uint16_t port)
+    {
+        bool ret = _socket.CreateServer(port);
+        assert(ret == true);
+        return _socket.GetFd();
+    }
+private:
+    Socket _socket; // 用于创建监听套接字
+    EventLoop* _loop; // 用于对监听套接字进行事件监控
+    Channel _channel; // 管理监听套接字
+
+    AcceptCallBack _accept_callback;
+};
+
