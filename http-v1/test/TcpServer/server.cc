@@ -18,7 +18,6 @@ void OnConnected(const ConnectionPtr &conn)
 void ConnectionDestory(const ConnectionPtr &conn)
 {
     DBG_LOG("Connection Destroy id=%lu", conn->GetId());
-    
 }
 
 int main()

@@ -1710,15 +1710,17 @@ class Acceptor
 {
 public:
     Acceptor(EventLoop *loop, uint16_t port)
-        : _socket(CreateServer(port)), _loop(loop), _channel(loop, _socket.GetFd())
+        : _socket(), _loop(loop), _channel(nullptr)
     {
-        _channel.SetReadCallBack(std::bind(&Acceptor::HandleRead, this));
-        // _channel.EnableRead(); 启动读事件监控不可以在设置回调之前
+        bool ret = _socket.CreateServer(port, "0.0.0.0", false);
+        assert(ret == true);
+        _channel = std::make_unique<Channel>(_loop, _socket.GetFd());
+        _channel->SetReadCallBack(std::bind(&Acceptor::HandleRead, this));
     }
 
     void Listen()
     {
-        _channel.EnableRead();
+        _channel->EnableRead();
     }
 
     void SetAcceptCallBack(const AcceptCallBack &cb)
@@ -1737,18 +1739,10 @@ private:
             _accept_callback(newfd);
     }
 
-    int CreateServer(uint16_t port)
-    {
-        bool ret = _socket.CreateServer(port);
-        assert(ret == true);
-        return _socket.GetFd();
-    }
-
 private:
-    Socket _socket;   // 用于创建监听套接字
-    EventLoop *_loop; // 用于对监听套接字进行事件监控
-    Channel _channel; // 管理监听套接字
-
+    Socket _socket;                    // 用于创建监听套接字
+    EventLoop *_loop;                  // 用于对监听套接字进行事件监控
+    std::unique_ptr<Channel> _channel; // 管理监听套接字
     AcceptCallBack _accept_callback;
 };
 
@@ -1822,7 +1816,7 @@ private:
 // 3. 提供线程分配的功能, 主线程获得一个新连接，需要将新连接挂到从属线程上进行事件监控及处理
 // 如果从属线程为0，则都由主线程处理，如果有多个线程则使用RR轮转思想进行线程分配(将对应的EventLoop获取到分配到Connection)
 
-class  LoopThreadPool
+class LoopThreadPool
 {
 public:
     LoopThreadPool(EventLoop *loop)
@@ -1892,11 +1886,7 @@ class TcpServer
 {
 public:
     TcpServer(uint16_t port)
-        : _port(port)
-        , _con_timer_id(0)
-        , _enable_inactive_release(false)
-        , _acceptor(&_baseloop, _port)
-        , _pool(&_baseloop)
+        : _port(port), _con_timer_id(0), _enable_inactive_release(false), _acceptor(&_baseloop, _port), _pool(&_baseloop)
     {
         _acceptor.SetAcceptCallBack(std::bind(&TcpServer::NewConnection, this, std::placeholders::_1));
         _acceptor.Listen(); // 开始关心事件
@@ -1906,7 +1896,7 @@ public:
     void Start()
     {
         _pool.CreateThread(); // 创建从属线程
-        _baseloop.Start();  // 启动监听
+        _baseloop.Start();    // 启动监听
     }
 
     void SetThreadCount(int cnt)
@@ -1957,7 +1947,7 @@ private:
     void NewConnection(int newfd)
     {
         _con_timer_id++;
- 
+
         ConnectionPtr conn(new Connection(_pool.GetLoop(), _con_timer_id, newfd));
 
         conn->SetCloseCallBack(_server_close_cb);
@@ -1967,24 +1957,24 @@ private:
         conn->SetServerCloseCallBack(std::bind(&TcpServer::RemoveConnection, this, std::placeholders::_1));
 
         // 启动非活跃连接销毁
-        if(_enable_inactive_release)
+        if (_enable_inactive_release)
             conn->EnableInactiveRealse(_timeout);
-        
+
         conn->Established();
         _connnections.emplace(_con_timer_id, conn);
     }
 
     // 从管理connections中移除连接信息
-    void RemoveConnection(const ConnectionPtr& conn)
+    void RemoveConnection(const ConnectionPtr &conn)
     {
         _baseloop.RunInLoop(std::bind(&TcpServer::RemoveConnectionInLoop, this, conn));
     }
 
-    void RemoveConnectionInLoop(const ConnectionPtr& conn)
-    {   
+    void RemoveConnectionInLoop(const ConnectionPtr &conn)
+    {
         int id = conn->GetId();
         auto it = _connnections.find(id);
-        if(it != _connnections.end())   
+        if (it != _connnections.end())
             _connnections.erase(id);
     }
 
@@ -1996,7 +1986,7 @@ private:
 
 private:
     uint16_t _port;
-    uint64_t _con_timer_id;          // 自动增长的连接id
+    uint64_t _con_timer_id;        // 自动增长的连接id
     int _timeout;                  // 非活跃连接的统计时间
     bool _enable_inactive_release; // 是否启动
     EventLoop _baseloop;           // 主线程
