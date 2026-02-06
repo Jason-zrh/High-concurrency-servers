@@ -1269,6 +1269,7 @@ void TimerWheel::TimerCancel(uint64_t id)
 // ==============================================
 
 class Connection;
+class TcpServer;
 class Any
 {
 public:
@@ -1897,13 +1898,14 @@ public:
         , _acceptor(&_baseloop, _port)
         , _pool(&_baseloop)
     {
-        _pool.CreateThread(); // 创建从属线程
+        _acceptor.SetAcceptCallBack(std::bind(&TcpServer::NewConnection, this, std::placeholders::_1));
         _acceptor.Listen(); // 开始关心事件
     }
 
     // 启动服务器
     void Start()
     {
+        _pool.CreateThread(); // 创建从属线程
         _baseloop.Start();  // 启动监听
     }
 
@@ -1956,22 +1958,34 @@ private:
     {
         _con_timer_id++;
  
-        ConnectionPtr conn(new Connection(_pool.GetLoop(), connect_id, newfd));
+        ConnectionPtr conn(new Connection(_pool.GetLoop(), _con_timer_id, newfd));
 
         conn->SetCloseCallBack(_server_close_cb);
         conn->SetConnectCallBack(_connect_cb);
         conn->SetMsgCallBack(_msg_cb);
         conn->SetAnyCallBack(_any_cb);
-        
+        conn->SetServerCloseCallBack(std::bind(&TcpServer::RemoveConnection, this, std::placeholders::_1));
 
-        conn->EnableInactiveRealse(10);
+        // 启动非活跃连接销毁
+        if(_enable_inactive_release)
+            conn->EnableInactiveRealse(_timeout);
+        
         conn->Established();
-        _connnections.emplace(connect_id, conn);
+        _connnections.emplace(_con_timer_id, conn);
     }
 
     // 从管理connections中移除连接信息
-    void RemoveConnection()
+    void RemoveConnection(const ConnectionPtr& conn)
     {
+        _baseloop.RunInLoop(std::bind(&TcpServer::RemoveConnectionInLoop, this, conn));
+    }
+
+    void RemoveConnectionInLoop(const ConnectionPtr& conn)
+    {   
+        int id = conn->GetId();
+        auto it = _connnections.find(id);
+        if(it != _connnections.end())   
+            _connnections.erase(id);
     }
 
     void SetDelayTaskInLoop(const Functor &func, int timeout)
