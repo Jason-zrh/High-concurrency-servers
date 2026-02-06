@@ -1,3 +1,4 @@
+#include <condition_variable>
 #include <unordered_map>
 #include <functional>
 #include <algorithm>
@@ -1751,4 +1752,58 @@ private:
     Channel _channel; // 管理监听套接字
 
     AcceptCallBack _accept_callback;
+};
+
+// ====================================================================================================
+//                                          LoopThread模块
+// ====================================================================================================
+
+// 目标: 将eventloop模块与线程整合起来
+// EventLoop 与线程是一一对应的，当eventloop构造的时候就会初始化线程id
+
+// eventloop模块在实例化对象的时候必须要在线程内部, 因此必须要先创建线程，然后在线程的函数入口中去实例化eventloop对象
+
+
+class LoopThread
+{
+public:
+    // 创建线程，设定线程入口函数
+    LoopThread()
+    :_loop(nullptr)
+    ,_thread(std::thread(&LoopThread::ThreadEntry, this))
+    { }
+
+    EventLoop* GetLoop()
+    {
+        EventLoop* loop = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(_mutex); // 加锁，loop为空就循环阻塞
+            _cond.wait(lock, [&](){ return _loop != nullptr; }); // 唤醒_cond上可能阻塞的线程
+            loop = _loop;
+        }
+        return loop;
+    }
+
+private:
+    // 实例化eventloop对象，启动eventloop模块
+    void ThreadEntry()
+    {
+        EventLoop loop;
+        {
+            std::unique_lock<std::mutex> lock(_mutex);
+            _loop = &loop;
+
+            // 唤醒等待的线程
+            _cond.notify_all();
+        }
+        // 启动loop
+        loop.Start();
+    }
+private:
+    EventLoop* _loop;    // 要在线程内实例化
+    std::thread _thread; // eventloop对应线程
+
+    // 用于实现_loop获取的同步关系，避免loop创建了但是还没有实例化之前就被获取
+    std::mutex _mutex;
+    std::condition_variable _cond; 
 };
