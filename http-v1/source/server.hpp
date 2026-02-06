@@ -1695,11 +1695,9 @@ private:
     ClosedCallBack _server_close_cb;
 };
 
-
 // ====================================================================================================
 //                                          Acceptor模块
 // ====================================================================================================
-
 
 // 用于管理监听套接字进行管理
 // 1.创建一个监听套接字
@@ -1710,21 +1708,19 @@ using AcceptCallBack = std::function<void(int)>;
 class Acceptor
 {
 public:
-    Acceptor(EventLoop* loop, uint16_t port)
-    :_socket(CreateServer(port))
-    ,_loop(loop)
-    ,_channel(loop, _socket.GetFd())
-    { 
+    Acceptor(EventLoop *loop, uint16_t port)
+        : _socket(CreateServer(port)), _loop(loop), _channel(loop, _socket.GetFd())
+    {
         _channel.SetReadCallBack(std::bind(&Acceptor::HandleRead, this));
         // _channel.EnableRead(); 启动读事件监控不可以在设置回调之前
-    }   
-    
+    }
+
     void Listen()
     {
         _channel.EnableRead();
     }
 
-    void SetAcceptCallBack(const AcceptCallBack& cb)
+    void SetAcceptCallBack(const AcceptCallBack &cb)
     {
         _accept_callback = cb;
     }
@@ -1734,9 +1730,9 @@ private:
     void HandleRead()
     {
         int newfd = _socket.Accept();
-        if(newfd < 0)
+        if (newfd < 0)
             return;
-        if(_accept_callback)
+        if (_accept_callback)
             _accept_callback(newfd);
     }
 
@@ -1746,9 +1742,10 @@ private:
         assert(ret == true);
         return _socket.GetFd();
     }
+
 private:
-    Socket _socket; // 用于创建监听套接字
-    EventLoop* _loop; // 用于对监听套接字进行事件监控
+    Socket _socket;   // 用于创建监听套接字
+    EventLoop *_loop; // 用于对监听套接字进行事件监控
     Channel _channel; // 管理监听套接字
 
     AcceptCallBack _accept_callback;
@@ -1763,22 +1760,22 @@ private:
 
 // eventloop模块在实例化对象的时候必须要在线程内部, 因此必须要先创建线程，然后在线程的函数入口中去实例化eventloop对象
 
-
 class LoopThread
 {
 public:
     // 创建线程，设定线程入口函数
     LoopThread()
-    :_loop(nullptr)
-    ,_thread(std::thread(&LoopThread::ThreadEntry, this))
-    { }
-
-    EventLoop* GetLoop()
+        : _loop(nullptr), _thread(std::thread(&LoopThread::ThreadEntry, this))
     {
-        EventLoop* loop = nullptr;
+    }
+
+    EventLoop *GetLoop()
+    {
+        EventLoop *loop = nullptr;
         {
             std::unique_lock<std::mutex> lock(_mutex); // 加锁，loop为空就循环阻塞
-            _cond.wait(lock, [&](){ return _loop != nullptr; }); // 唤醒_cond上可能阻塞的线程
+            _cond.wait(lock, [&]()
+                       { return _loop != nullptr; }); // 唤醒_cond上可能阻塞的线程
             loop = _loop;
         }
         return loop;
@@ -1799,11 +1796,206 @@ private:
         // 启动loop
         loop.Start();
     }
+
 private:
-    EventLoop* _loop;    // 要在线程内实例化
+    EventLoop *_loop;    // 要在线程内实例化
     std::thread _thread; // eventloop对应线程
 
     // 用于实现_loop获取的同步关系，避免loop创建了但是还没有实例化之前就被获取
     std::mutex _mutex;
-    std::condition_variable _cond; 
+    std::condition_variable _cond;
+};
+
+// ====================================================================================================
+//                                        LoopThreadPool模块
+// ====================================================================================================
+
+// 对所有的loopthread进行管理和分配
+// 功能:
+// 1. 核心线程数量
+// --- 注意事项 ---
+// 在服务器中，主从Reactor模型是主线程只负责新连接获取，从属线程负责新连接的事件监控和处理
+// 因此当前从属线程数量可能为0， 也就是单Reactor服务器，一个线程负责获取连接，也负责连接的处理
+
+// 2. 对所有的线程进行管理，管理0个或多个LoopThread对象
+// 3. 提供线程分配的功能, 主线程获得一个新连接，需要将新连接挂到从属线程上进行事件监控及处理
+// 如果从属线程为0，则都由主线程处理，如果有多个线程则使用RR轮转思想进行线程分配(将对应的EventLoop获取到分配到Connection)
+
+class  LoopThreadPool
+{
+public:
+    LoopThreadPool(EventLoop *loop)
+        : _thread_count(0), _thread_index(0), _base_loop(loop)
+    {
+    }
+
+    void SetThreadCount(int cnt)
+    {
+        _thread_count = cnt;
+    }
+
+    // 创建所有的从属线程
+    void CreateThread()
+    {
+        if (_thread_count > 0)
+        {
+            _threads.resize(_thread_count);
+            _loops.resize(_thread_count);
+            for (int i = 0; i < _thread_count; i++)
+            {
+                _threads[i] = new LoopThread();
+                _loops[i] = _threads[i]->GetLoop();
+            }
+        }
+    }
+
+    EventLoop *GetLoop()
+    {
+        // 轮转派发loop
+        if (_thread_count == 0)
+            return _base_loop;
+
+        _thread_index = (_thread_index + 1) % _thread_count;
+        return _loops[_thread_index];
+    }
+
+private:
+    int _thread_count; // 从属线程的数量
+    int _thread_index;
+    EventLoop *_base_loop;              // 主EventLoop
+    std::vector<LoopThread *> _threads; // 保存所有Loopthread对象
+    std::vector<EventLoop *> _loops;
+};
+
+// ====================================================================================================
+//                                        TcpServer模块
+// ====================================================================================================
+
+// 管理
+// 1. Acceptor对象，创建监听套接字
+// 2. EventLoop对象，baseLoop对象，实现对监听套接字的事件监控
+// 3. std::unordered_map<int, ConnectionPtr> connections 管理新连接
+// 4. LoopTreadPool 创建loop线程池，对新建连接进行事件监控及处理
+
+// 功能
+// 1. 设置从属线程池数量
+// 2. 启动服务器
+// 3. 设置业务回调函数(连接建立完成，消息，关闭，任意)
+// 4. 是否启动非活跃超时销毁
+// 5. 添加定时任务
+
+// 定时任务
+using Functor = std::function<void()>;
+
+class TcpServer
+{
+public:
+    TcpServer(uint16_t port)
+        : _port(port)
+        , _con_timer_id(0)
+        , _enable_inactive_release(false)
+        , _acceptor(&_baseloop, _port)
+        , _pool(&_baseloop)
+    {
+        _pool.CreateThread(); // 创建从属线程
+        _acceptor.Listen(); // 开始关心事件
+    }
+
+    // 启动服务器
+    void Start()
+    {
+        _baseloop.Start();  // 启动监听
+    }
+
+    void SetThreadCount(int cnt)
+    {
+        _pool.SetThreadCount(cnt);
+    }
+
+    void EnableInactiveRealse(int timeout)
+    {
+        _timeout = timeout;
+        _enable_inactive_release = true;
+    }
+
+    // 设置延迟任务, 用于添加用户需要的定时任务
+    void SetDelayTask(const Functor &func, int timeout)
+    {
+        _baseloop.RunInLoop(std::bind(&TcpServer::SetDelayTaskInLoop, this, func, timeout));
+    }
+
+    // 设置Connection回调函数
+    void SetConnectCallBack(const ConnectedCallBack &cb)
+    {
+        _connect_cb = cb;
+    }
+
+    void SetMsgCallBack(const MessageCallBack &cb)
+    {
+        _msg_cb = cb;
+    }
+
+    void SetCloseCallBack(const ClosedCallBack &cb)
+    {
+        _close_cb = cb;
+    }
+
+    void SetAnyCallBack(const AnyCallBack &cb)
+    {
+        _any_cb = cb;
+    }
+
+    void SetServerCloseCallBack(const ClosedCallBack &cb)
+    {
+        _server_close_cb = cb;
+    }
+
+private:
+    // 为新连接创建一个Connetion进行管理
+    void NewConnection(int newfd)
+    {
+        _con_timer_id++;
+ 
+        ConnectionPtr conn(new Connection(_pool.GetLoop(), connect_id, newfd));
+
+        conn->SetCloseCallBack(_server_close_cb);
+        conn->SetConnectCallBack(_connect_cb);
+        conn->SetMsgCallBack(_msg_cb);
+        conn->SetAnyCallBack(_any_cb);
+        
+
+        conn->EnableInactiveRealse(10);
+        conn->Established();
+        _connnections.emplace(connect_id, conn);
+    }
+
+    // 从管理connections中移除连接信息
+    void RemoveConnection()
+    {
+    }
+
+    void SetDelayTaskInLoop(const Functor &func, int timeout)
+    {
+        _con_timer_id++;
+        _baseloop.TimerAdd(_con_timer_id, timeout, func);
+    }
+
+private:
+    uint16_t _port;
+    uint64_t _con_timer_id;          // 自动增长的连接id
+    int _timeout;                  // 非活跃连接的统计时间
+    bool _enable_inactive_release; // 是否启动
+    EventLoop _baseloop;           // 主线程
+    Acceptor _acceptor;            // 监听套接字
+
+    LoopThreadPool _pool;                                      // 从属loop线程池
+    std::unordered_map<uint64_t, ConnectionPtr> _connnections; // 保存所有连接的Shared_ptr对象
+
+    // 业务处理
+    ConnectedCallBack _connect_cb;
+    MessageCallBack _msg_cb;
+    ClosedCallBack _close_cb;
+    AnyCallBack _any_cb;
+    // 移除服务器内部的管理信息
+    ClosedCallBack _server_close_cb;
 };
