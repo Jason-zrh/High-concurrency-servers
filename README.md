@@ -226,8 +226,99 @@ DisableRead();   // 取消读事件
 DisableWrite();  // 取消写事件
 DisableAll();    // 取消所有事件
 ```
-### EvenLoop模块
-### **TimeWheel模块
-### **Connection模块
-### **Acceptor模块
-### **TcpServer模块
+### EventLoop 模块
+EventLoop 模块负责 **事件监控、就绪事件处理和任务调度**。  
+核心职责包括：
+
+- 使用 Poller 监听注册的 Channel 的事件
+- 处理就绪事件，调用 Channel 对应回调
+- 提供线程安全的任务队列机制
+- 提供定时器接口（通过 TimerWheel）
+
+---
+
+### TimerWheel 模块
+TimerWheel 是基于 **时间轮思想** 的定时器模块，用于高效管理大量定时任务。  
+
+- 每个时间轮槽位存储多个任务（shared_ptr 管理生命周期）
+- 每次 tick 推进清理当前槽位
+- 支持任务刷新、取消、添加
+- 结合 EventLoop 实现线程安全操作
+
+---
+
+### Connection 模块
+Connection 模块封装单个 TCP 连接，负责管理：
+
+- 套接字 I/O
+- Channel 事件回调
+- 输入/输出缓冲区
+- 协议上下文
+- 连接状态与定时销毁管理
+
+提供接口包括：
+
+- `Send()`, `ShutDown()`, `EnableInactiveRealse()`
+- 设置业务回调：`SetConnectCallBack()`、`SetMsgCallBack()`、`SetCloseCallBack()`、`SetAnyCallBack()`
+- 协议升级：`UpGrade()`
+
+---
+
+### Acceptor 模块
+Acceptor 模块负责 **监听端口并接收新连接**，并将新连接交给上层处理。  
+
+核心职责：
+
+- 创建监听套接字
+- 启动读事件监控
+- 触发事件时获取新连接，并回调上层逻辑
+
+接口：
+
+- `Listen()`：启动监听
+- `SetAcceptCallBack()`：设置新连接回调
+
+---
+
+### LoopThread 模块
+LoopThread 将 EventLoop 与线程整合，实现 **One Thread One Loop** 思路。  
+
+- 每个线程管理一个 EventLoop 实例
+- 提供线程安全的获取 EventLoop 接口
+- 启动线程后自动运行 EventLoop
+
+---
+
+### LoopThreadPool 模块
+LoopThreadPool 管理多个 LoopThread，用于从 Reactor 模型的 **主从线程分配**。  
+
+核心职责：
+
+- 创建和管理从属 LoopThread（工作线程）
+- 提供轮转或其他策略的 EventLoop 分配
+- 支持 0 个线程（单 Reactor 模型）
+
+用途：
+
+- 主 Reactor 获取新连接，将连接分发给从 Reactor 的 EventLoop 进行事件监控和处理
+- 支持多 Reactor 多线程场景，充分利用 CPU 多核资源
+
+---
+
+### TcpServer 模块
+TcpServer 是完整的 **高性能 TCP 服务器** 封装，实现主从 Reactor 模型。  
+
+功能：
+
+- 创建主 Reactor（Acceptor + EventLoop）
+- 初始化从属 Reactor（LoopThreadPool）
+- 提供连接回调接口（新连接、消息、关闭等）
+- 对 Connection 进行统一管理
+- 支持协议升级、定时销毁非活跃连接
+
+核心流程：
+
+1. 启动主 Reactor，监听端口
+2. 接收新连接，通过 LoopThreadPool 分发给从 Reactor
+3. 每个从 Reactor 管理 Connection 的读写事件
+4. Connection 通过 EventLoop 执行任务、定时器、业务回调
