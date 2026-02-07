@@ -557,6 +557,12 @@ public:
     {
         _event_cb = cb;
     }
+    // 绑定对象生命周期，避免回调期间对象已析构
+    void Tie(const std::shared_ptr<void> &obj)
+    {
+        _tie = obj;
+        _tied = true;
+    }
     // 是否监控了读事件
     bool ReadAble()
     {
@@ -601,6 +607,14 @@ public:
     // 解决触发事件
     void HandleEvent()
     {
+        std::shared_ptr<void> guard;
+        if (_tied)
+        {
+            guard = _tie.lock();
+            if (!guard)
+                return;
+        }
+
         if (_event_cb)
             _event_cb();
 
@@ -652,6 +666,8 @@ private:
     EventCallBack _error_cb; // 错误产生
     EventCallBack _close_cb; // 连接关闭
     EventCallBack _event_cb; // 任意一个事件触发
+    std::weak_ptr<void> _tie;
+    bool _tied{false};
 };
 
 // ====================================================================================================
@@ -1387,38 +1403,54 @@ public:
         _channel.SetWriteCallBack(std::bind(&Connection::HandleWrite, this));
     }
 
+    // 绑定自身生命周期到Channel，避免事件回调期间对象被析构
+    void Tie(const ConnectionPtr &self)
+    {
+        _channel.Tie(self);
+    }
+
     // 发送数据
     void Send(const char *data, size_t len)
     {
         // 这里的data可能是外部临时变量，该任务被压入任务队列，如果外部空间释放会导致空指针引用
         Buffer buf;
         buf.Write(data, len);
-        _loop->RunInLoop(std::bind(&Connection::SendInLoop, this, buf));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self, buf]()
+                         { self->SendInLoop(buf); });
     }
 
     // 提供给组件使用者的关闭接口 -- 并不实际关闭，需要判断有咩有数据待处理
     void ShutDown()
     {
-        _loop->RunInLoop(std::bind(&Connection::ShutDownInLoop, this));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self]()
+                         { self->ShutDownInLoop(); });
     }
 
     // 启动非活跃销毁，参数是多长时间无通信销毁
     void EnableInactiveRealse(int sec)
     {
-        _loop->RunInLoop(std::bind(&Connection::EnableInactiveRealseInLoop, this, sec));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self, sec]()
+                         { self->EnableInactiveRealseInLoop(sec); });
     }
 
     // 取消非活跃销毁
     void DisableInactiveRealse()
     {
-        _loop->RunInLoop(std::bind(&Connection::DisableInactiveRealseInLoop, this));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self]()
+                         { self->DisableInactiveRealseInLoop(); });
     }
 
     // 切换协议，重置上下文和阶段性处理函数 -- 非线程安全的
     void UpGrade(const Any &context, const ConnectedCallBack &conn, const MessageCallBack &msg, const ClosedCallBack &close, const AnyCallBack &any)
     {
         _loop->AssertInLoop();
-        _loop->RunInLoop(std::bind(&Connection::UpGradeInLoop, this, context, conn, msg, close, any));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self, context, conn, msg, close, any]()
+                         { self->UpGradeInLoop(context, conn, msg, close, any); });
     }
 
     // 获取文件描述符
@@ -1435,7 +1467,9 @@ public:
 
     void Established()
     {
-        _loop->RunInLoop(std::bind(&Connection::EstablishedInLoop, this));
+        auto self = shared_from_this();
+        _loop->RunInLoop([self]()
+                         { self->EstablishedInLoop(); });
     }
 
     // 返回状态
@@ -1504,7 +1538,9 @@ private:
         if (_inBuffer.ReadAbleSize() > 0)
         {
             if (_msg_cb)
+            {
                 _msg_cb(shared_from_this(), &_inBuffer);
+            }
         }
         if (_outBuffer.ReadAbleSize() > 0)
         {
@@ -1530,10 +1566,14 @@ private:
             DisableInactiveRealseInLoop();
 
         if (_close_cb)
+        {
             _close_cb(shared_from_this());
+        }
 
         if (_server_close_cb)
+        {
             _server_close_cb(shared_from_this());
+        }
     }
 
     // 连接获取后的状态下需要进行各种设置的状态: 设置事件回调，启动读监控
@@ -1543,7 +1583,9 @@ private:
         _state = CONNECTED;
         _channel.EnableRead();
         if (_connect_cb)
+        {
             _connect_cb(shared_from_this());
+        }
     }
 
     void EnableInactiveRealseInLoop(int sec)
@@ -1553,8 +1595,12 @@ private:
         if (_loop->HasTimer(_connect_id) == true)
             _loop->TimerRefresh(_connect_id);
         else
+        {
             // 任务不存在，新增任务
-            _loop->TimerAdd(_connect_id, sec, std::bind(&Connection::ReleaseInLoop, this));
+            auto self = shared_from_this();
+            _loop->TimerAdd(_connect_id, sec, [self]()
+                            { self->ReleaseInLoop(); });
+        }
     }
 
     void DisableInactiveRealseInLoop()
@@ -1615,7 +1661,9 @@ private:
         if (_inBuffer.ReadAbleSize() > 0)
         {
             if (_msg_cb)
+            {
                 _msg_cb(shared_from_this(), &_inBuffer);
+            }
         }
     }
 
@@ -1628,7 +1676,8 @@ private:
         {
             if (_inBuffer.ReadAbleSize() > 0)
             {
-                _msg_cb(shared_from_this(), &_inBuffer);
+                if (_msg_cb)
+                    _msg_cb(shared_from_this(), &_inBuffer);
             }
             ReleaseInLoop();
             return;
@@ -1655,7 +1704,8 @@ private:
     {
         if (_inBuffer.ReadAbleSize() > 0)
         {
-            _msg_cb(shared_from_this(), &_inBuffer);
+            if (_msg_cb)
+                _msg_cb(shared_from_this(), &_inBuffer);
         }
         ReleaseInLoop();
     }
@@ -1673,7 +1723,9 @@ private:
 
         // 调用组件使用者的事件回调
         if (_any_cb)
+        {
             _any_cb(shared_from_this());
+        }
     }
 
 private:
@@ -1950,6 +2002,7 @@ private:
         _con_timer_id++;
 
         ConnectionPtr conn(new Connection(_pool.GetLoop(), _con_timer_id, newfd));
+        conn->Tie(conn); // 绑定自身弱引用，避免并发释放阶段shared_from_this异常
 
         conn->SetCloseCallBack(_server_close_cb);
         conn->SetConnectCallBack(_connect_cb);
