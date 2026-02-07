@@ -17,7 +17,7 @@ class EchoServer {
         }
     public:
         EchoServer(int port):_server(port) {
-            _server.SetThreadCount(2);
+            _server.SetThreadCount(4);
             _server.EnableInactiveRealse(10);
             _server.SetCloseCallBack(std::bind(&EchoServer::OnClosed, this, std::placeholders::_1));
             _server.SetConnectCallBack(std::bind(&EchoServer::OnConnected, this, std::placeholders::_1));
