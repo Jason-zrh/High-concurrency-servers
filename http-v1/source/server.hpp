@@ -686,6 +686,7 @@ public:
             abort();
         }
     }
+
     // 更新一个事件的监控事件或着将一个事件添加到监控中
     void UpdateEvent(Channel *channel)
     {
@@ -762,7 +763,6 @@ private:
     void Update(Channel *channel, int op)
     {
         int fd = channel->GetFd();
-
         if (op == EPOLL_CTL_DEL)
         {
             if (epoll_ctl(_epfd, EPOLL_CTL_DEL, fd, nullptr) < 0)
@@ -842,14 +842,13 @@ public:
      * @id       : 定时任务唯一标识
      * @timeout  : 超时时间（秒）
      * @cb       : 定时任务到期后要执行的回调函数
-     */
+    */
     TimerTask(uint64_t id, uint32_t timeout, const TaskFunc &cb)
         : _id(id),
           _timeout(timeout),
           _task_cb(cb),
           _isCancel(false) // 默认任务未被取消
-    {
-    }
+    { }
 
     /*
      * 析构函数：
@@ -925,12 +924,9 @@ class TimerWheel
 public:
     TimerWheel(EventLoop *loop)
         : _capacity(60) // 时间轮大小（60 秒一圈）
-          ,
-          _tick(0) // 当前指针位置
-          ,
-          _wheel(_capacity) // 初始化时间轮槽位
-          ,
-          _loop(loop), _timerfd(CreateTimerFd()), _timer_channel(new Channel(_loop, _timerfd))
+        , _tick(0) // 当前指针位置
+        , _wheel(_capacity) // 初始化时间轮槽位
+        , _loop(loop), _timerfd(CreateTimerFd()), _timer_channel(new Channel(_loop, _timerfd))
     {
         _timer_channel->SetReadCallBack(std::bind(&TimerWheel::Ontime, this));
         _timer_channel->EnableRead(); // 启动读事件监控，一旦触发读事件就会调用可读回调函数
@@ -1099,7 +1095,10 @@ class EventLoop
 public:
     using Functor = std::function<void()>;
     EventLoop()
-        : _thread_id(std::this_thread::get_id()), _eventfd(CreateEventFd()), _eventfd_channel(new Channel(this, _eventfd)), _timer_wheel(this)
+        : _thread_id(std::this_thread::get_id())
+        , _eventfd(CreateEventFd())
+        , _eventfd_channel(new Channel(this, _eventfd))
+        , _timer_wheel(this)
     {
         _eventfd_channel->SetReadCallBack(std::bind(&EventLoop::ReadEventFd, this));
         _eventfd_channel->EnableRead(); // 启动对读事件的监控
@@ -1392,7 +1391,12 @@ class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
     Connection(EventLoop *loop, uint64_t connect_id, int fd)
-        : _loop(loop), _connect_id(connect_id), _sockfd(fd), _channel(loop, fd), _enable_inactive_release(false), _state(CONNECTING), _socket(fd)
+        : _loop(loop)
+        , _connect_id(connect_id)
+        , _sockfd(fd)
+        , _channel(loop, fd)
+        , _enable_inactive_release(false)
+        , _state(CONNECTING), _socket(fd)
     {
         _channel.SetCloseCallBack(std::bind(&Connection::HandleClose, this));
         _channel.SetErrorCallBack(std::bind(&Connection::HandleError, this));
@@ -1761,7 +1765,9 @@ class Acceptor
 {
 public:
     Acceptor(EventLoop *loop, uint16_t port)
-        : _socket(), _loop(loop), _channel(nullptr)
+        : _socket()
+        , _loop(loop)
+        , _channel(nullptr)
     {
         bool ret = _socket.CreateServer(port, "0.0.0.0", false);
         assert(ret == true);
@@ -1811,9 +1817,9 @@ class LoopThread
 public:
     // 创建线程，设定线程入口函数
     LoopThread()
-        : _loop(nullptr), _thread(std::thread(&LoopThread::ThreadEntry, this))
-    {
-    }
+        : _loop(nullptr)
+        , _thread(std::thread(&LoopThread::ThreadEntry, this))
+    { }
 
     EventLoop *GetLoop()
     {
@@ -1871,9 +1877,10 @@ class LoopThreadPool
 {
 public:
     LoopThreadPool(EventLoop *loop)
-        : _thread_count(0), _thread_index(0), _base_loop(loop)
-    {
-    }
+        : _thread_count(0)
+        , _thread_index(0)
+        , _base_loop(loop)
+    { }
 
     void SetThreadCount(int cnt)
     {
@@ -1937,7 +1944,11 @@ class TcpServer
 {
 public:
     TcpServer(uint16_t port)
-        : _port(port), _con_timer_id(0), _enable_inactive_release(false), _acceptor(&_baseloop, _port), _pool(&_baseloop)
+        : _port(port)
+        , _con_timer_id(0)
+        , _enable_inactive_release(false)
+        , _acceptor(&_baseloop, _port)
+        , _pool(&_baseloop)
     {
         _acceptor.SetAcceptCallBack(std::bind(&TcpServer::NewConnection, this, std::placeholders::_1));
         _acceptor.Listen(); // 开始关心事件

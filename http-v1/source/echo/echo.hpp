@@ -88,8 +88,22 @@
 
 class EchoServer
 {
-private:
-    TcpServer _server;
+public:
+    EchoServer(int port)
+        : _server(port)
+    {
+        _server.SetThreadCount(4);
+        _server.EnableInactiveRealse(10);
+        _server.SetCloseCallBack(
+            std::bind(&EchoServer::OnClosed, this, std::placeholders::_1));
+        _server.SetConnectCallBack(
+            std::bind(&EchoServer::OnConnected, this, std::placeholders::_1));
+        _server.SetMsgCallBack(
+            std::bind(&EchoServer::OnMessage, this,
+                      std::placeholders::_1, std::placeholders::_2));
+    }
+
+    void Start() { _server.Start(); }
 
 private:
     void OnConnected(const ConnectionPtr &conn)
@@ -137,21 +151,6 @@ private:
         }
         // 如果 keep_alive = true，则继续监听，可复用连接
     }
-
-public:
-    EchoServer(int port)
-        : _server(port)
-    {
-        _server.SetThreadCount(4);
-        _server.EnableInactiveRealse(10);
-        _server.SetCloseCallBack(
-            std::bind(&EchoServer::OnClosed, this, std::placeholders::_1));
-        _server.SetConnectCallBack(
-            std::bind(&EchoServer::OnConnected, this, std::placeholders::_1));
-        _server.SetMsgCallBack(
-            std::bind(&EchoServer::OnMessage, this,
-                      std::placeholders::_1, std::placeholders::_2));
-    }
-
-    void Start() { _server.Start(); }
+private:
+    TcpServer _server;
 };
