@@ -56,9 +56,10 @@ class Buffer
 {
 public:
     Buffer()
-        : _buffer(DEFAULT_BUFFER_SIZE), _reader_idx(0), _writer_idx(0)
-    {
-    }
+        : _buffer(DEFAULT_BUFFER_SIZE)
+        , _reader_idx(0)
+        , _writer_idx(0)
+    { }
 
     // 当前写指针位置
     char *WritePos()
@@ -117,15 +118,11 @@ public:
         // 允许空写
         if (len == 0)
             return;
-
         // 非空写入必须保证数据指针有效
         assert(data != nullptr);
-
         EnsureWriteSpace(len);
-
         const char *d = static_cast<const char *>(data);
         std::copy(d, d + len, WritePos());
-
         MoveWriteOffset(len);
     }
 
@@ -206,14 +203,12 @@ public:
             {
                 new_size *= 2;
             }
-
             _buffer.resize(new_size);
         }
     }
 
     ~Buffer()
-    {
-    }
+    { }
 
 private:
     // 返回底层缓冲区起始地址
@@ -233,7 +228,6 @@ private:
     {
         return _reader_idx;
     }
-
 private:
     std::vector<char> _buffer; // 实际存储空间
     uint64_t _reader_idx;      // 读指针
@@ -258,14 +252,12 @@ public:
     // 构造一个无效 socket
     Socket()
         : _sockfd(-1)
-    {
-    }
+    { }
 
     // 用已有 fd 构造（常用于 accept 之后）
     Socket(int fd)
         : _sockfd(fd)
-    {
-    }
+    { }
 
     // 创建 TCP 套接字
     bool CreateSocket()
@@ -329,6 +321,7 @@ public:
             if (errno == EINTR)
                 continue; // 被信号打断，重试
 
+            // 非阻塞情况下这里需要返回了，不然会陷入无限自循环
             if (errno == EAGAIN)
                 return -1; // 当前无连接（非阻塞正常情况）
 
@@ -347,6 +340,8 @@ public:
 
         socklen_t len = sizeof(server);
         int ret = connect(_sockfd, (const sockaddr *)&server, len);
+        // EINPROGRESS状态码代表: 握手已经发起了，但还没收到对方的 ACK。我先去忙别的了，你自己盯着点进度。
+        // 用于非阻塞轮询
         if (ret < 0 && errno != EINPROGRESS)
         {
             ERR_LOG("Connect ERR");
@@ -366,8 +361,9 @@ public:
         ssize_t ret = recv(_sockfd, buf, len, flag);
         if (ret < 0)
         {
+            // 当前无数据（非阻塞正常）
             if (errno == EINTR || errno == EAGAIN)
-                return -1; // 当前无数据（非阻塞正常）
+                return -1; 
 
             ERR_LOG("Recv ERR");
             return -1;
@@ -379,13 +375,13 @@ public:
             INF_LOG("Peer Closed");
             return 0;
         }
-
         return ret;
     }
 
     // 非阻塞接收（通过 MSG_DONTWAIT）
     ssize_t NonBlockRecv(void *buf, size_t len)
     {
+        // MSG_DONTWAIT非阻塞
         return Recv(buf, len, MSG_DONTWAIT);
     }
 
@@ -511,12 +507,14 @@ class Channel
 public:
     // 创建一个channel类
     Channel(EventLoop *loop, int fd)
-        : _loop(loop), _fd(fd), _events(0), _revents(0)
-    {
-    }
+        : _loop(loop)
+        , _fd(fd)
+        , _events(0)
+        , _revents(0)
+        , _tied(false)
+    { }
     ~Channel()
-    {
-    }
+    { }
     // 更新
     void Update();
     // 移除监控(从epoll的红黑树上删除掉)
@@ -667,7 +665,7 @@ private:
     EventCallBack _close_cb; // 连接关闭
     EventCallBack _event_cb; // 任意一个事件触发
     std::weak_ptr<void> _tie;
-    bool _tied{false};
+    bool _tied;
 };
 
 // ====================================================================================================
@@ -2003,7 +2001,6 @@ private:
 
         ConnectionPtr conn(new Connection(_pool.GetLoop(), _con_timer_id, newfd));
         conn->Tie(conn); // 绑定自身弱引用，避免并发释放阶段shared_from_this异常
-
         conn->SetCloseCallBack(_server_close_cb);
         conn->SetConnectCallBack(_connect_cb);
         conn->SetMsgCallBack(_msg_cb);

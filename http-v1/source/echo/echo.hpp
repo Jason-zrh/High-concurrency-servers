@@ -84,23 +84,26 @@
 //     void Start() { _server.Start(); }
 // };
 
-
 #include "../server.hpp"
 
-class EchoServer {
+class EchoServer
+{
 private:
     TcpServer _server;
 
 private:
-    void OnConnected(const ConnectionPtr &conn) {
+    void OnConnected(const ConnectionPtr &conn)
+    {
         DBG_LOG("NEW CONNECTION: %p", conn.get());
     }
 
-    void OnClosed(const ConnectionPtr &conn) {
+    void OnClosed(const ConnectionPtr &conn)
+    {
         DBG_LOG("CLOSE CONNECTION: %p", conn.get());
     }
 
-    void OnMessage(const ConnectionPtr &conn, Buffer *buf) {
+    void OnMessage(const ConnectionPtr &conn, Buffer *buf)
+    {
         // 1️⃣ 读取完整请求并丢弃
         buf->MoveReadOffset(buf->ReadAbleSize());
 
@@ -110,32 +113,35 @@ private:
         bool keep_alive = false;
         std::string request(buf->ReadPos(), buf->ReadAbleSize());
         if (request.find("Connection: keep-alive") != std::string::npos ||
-            request.find("connection: keep-alive") != std::string::npos) {
+            request.find("connection: keep-alive") != std::string::npos)
+        {
             keep_alive = true;
         }
 
         // 3️⃣ 构造最小 HTTP/1.1 响应
-        const char* body = "Hello";
+        const char *body = "Hello";
         std::string resp =
             "HTTP/1.1 200 OK\r\n"
-            "Content-Length: 5\r\n"
-            + std::string("Connection: ") + (keep_alive ? "keep-alive" : "close") + "\r\n"
-            "\r\n"
-            "Hello";
+            "Content-Length: 5\r\n" +
+            std::string("Connection: ") + (keep_alive ? "keep-alive" : "close") + "\r\n"
+                                                                                  "\r\n"
+                                                                                  "Hello";
 
         // 4️⃣ 发送响应
         conn->Send(resp.c_str(), resp.size());
 
         // 5️⃣ 决定是否关闭连接
-        if (!keep_alive) {
-            conn->ShutDown();  // 仅关闭不复用连接
+        if (!keep_alive)
+        {
+            conn->ShutDown(); // 仅关闭不复用连接
         }
         // 如果 keep_alive = true，则继续监听，可复用连接
     }
 
 public:
     EchoServer(int port)
-        : _server(port) {
+        : _server(port)
+    {
         _server.SetThreadCount(4);
         _server.EnableInactiveRealse(10);
         _server.SetCloseCallBack(
@@ -149,6 +155,3 @@ public:
 
     void Start() { _server.Start(); }
 };
-
-
-
