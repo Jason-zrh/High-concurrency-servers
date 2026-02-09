@@ -146,6 +146,7 @@ public:
                 i += 2;
                 continue;
             }
+            res += url[i];
         }
         return res;
     }
