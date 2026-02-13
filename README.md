@@ -322,3 +322,399 @@ TcpServer 是完整的 **高性能 TCP 服务器** 封装，实现主从 Reactor
 2. 接收新连接，通过 LoopThreadPool 分发给从 Reactor
 3. 每个从 Reactor 管理 Connection 的读写事件
 4. Connection 通过 EventLoop 执行任务、定时器、业务回调
+
+
+## HTTP模块
+
+HTTP 模块在服务器中的层级结构：
+```
+TcpServer
+   │
+   ├── Connection
+   │       │
+   │       ├── Buffer（收发缓冲区）
+   │       ├── HttpContext（HTTP解析状态机）
+   │       ├── HttpRequest
+   │       └── HttpResponse
+   │
+   └── HttpServer（路由 + 业务分发）
+```
+
+## 模块职责划分
+
+| 模块 | 职责 |
+|------|------|
+| Util | 字符串处理、文件操作、MIME 类型解析 |
+| HttpRequest | 保存 HTTP 请求数据 |
+| HttpResponse | 构造 HTTP 响应报文 |
+| HttpContext | HTTP 协议状态机解析 |
+| HttpServer | 路由管理与业务回调分发 |
+
+---
+
+### Util 工具模块
+
+#### 1. 字符串处理
+
+```cpp
+static std::vector<std::string> Split(const std::string &src, const std::string &sep);
+static std::string UrlEncode(const std::string &url);
+static std::string UrlDecode(const std::string &url);
+```
+
+#### 功能
+
+- 查询字符串解析
+- 表单参数解析
+- RFC3986 URL 编解码支持
+
+---
+
+#### 2. 文件读写
+
+```cpp
+static bool ReadFile(const std::string &filename, std::string *body);
+static bool WriteFile(const std::string &filename, const std::string &body);
+```
+
+#### 特点
+
+- 二进制方式读取
+- 一次性加载至内存
+- 适用于静态资源响应
+
+---
+
+#### 3. MIME 类型推导
+
+```cpp
+static std::string ExMime(const std::string &filename);
+```
+
+根据文件扩展名推导 `Content-Type`
+
+默认类型：
+
+```
+application/octet-stream
+```
+
+---
+
+#### 4. 路径安全校验
+
+```cpp
+static bool IsValid(const std::string &path);
+```
+
+防止目录穿越攻击：
+
+- 拒绝 `..`
+- 限制非法路径访问
+- 保证静态资源访问安全
+
+---
+
+#### 5. 文件类型判断
+
+```cpp
+static bool IsDirection(const std::string &path);
+static bool IsRegular(const std::string &path);
+```
+
+---
+
+### HttpRequest 模块
+
+> 表示一次完整的 HTTP 请求  
+> 仅保存解析结果，不负责解析流程  
+
+#### 核心成员
+
+```cpp
+std::string _method;
+std::string _path;
+std::string _version;
+std::string _body;
+std::unordered_map<std::string, std::string> _headers;
+std::unordered_map<std::string, std::string> _params;
+std::smatch _matches;
+```
+
+---
+
+#### 核心功能
+
+#### 1. 头部管理
+
+```cpp
+void SetHeader(const std::string &key, const std::string &value);
+bool HasHeader(const std::string &key) const;
+std::string GetHeader(const std::string &key) const;
+```
+
+---
+
+#### 2. 参数管理
+
+```cpp
+void SetParam(const std::string &key, const std::string &value);
+bool HasParam(const std::string &key) const;
+std::string GetParam(const std::string &key) const;
+```
+
+---
+
+#### 3. 内容长度获取
+
+```cpp
+size_t ContentLength() const;
+```
+
+从 `Content-Length` 头部提取正文长度。
+
+---
+
+#### 4. 长短连接判断
+
+```cpp
+bool Close() const;
+```
+
+逻辑：
+
+- `Connection: keep-alive` → 长连接
+- 默认 HTTP/1.1 → 长连接
+- 显式 `close` → 短连接
+
+---
+
+### HttpResponse 模块
+
+> 用于组织 HTTP 响应数据  
+> 业务层通过填充 HttpResponse 构造响应  
+
+#### 核心成员
+
+```cpp
+int _status;
+bool _redirect_flag;
+std::string _body;
+std::string _redirect_url;
+std::unordered_map<std::string, std::string> _headers;
+```
+
+---
+
+#### 核心功能
+
+#### 1. 设置正文
+
+```cpp
+void SetContent(const std::string &body, const std::string &type);
+```
+
+自动设置：
+
+```
+Content-Type
+Content-Length
+```
+
+---
+
+#### 2. 设置重定向
+
+```cpp
+void SetRedirect(const std::string &url, int status);
+```
+
+自动添加：
+
+```
+Location
+```
+
+---
+
+#### 3. 连接控制
+
+根据请求版本和头部决定：
+
+- keep-alive
+- close
+
+---
+
+### HttpContext 模块（核心）
+
+> HTTP 协议解析状态机  
+> 每个 Connection 绑定一个 HttpContext  
+
+---
+
+#### 状态定义
+
+```cpp
+enum HttpState
+{
+    RECV_HTTP_LINE,
+    RECV_HTTP_HEAD,
+    RECV_HTTP_BODY,
+    RECV_HTTP_OVER,
+    RECV_HTTP_ERROR
+};
+```
+
+---
+
+#### 状态机解析流程
+
+#### 1️⃣ 解析请求行
+
+格式：
+
+```
+GET /index.html?name=abc HTTP/1.1
+```
+
+解析内容：
+
+- Method
+- Path
+- Query 参数
+- Version
+
+使用正则匹配：
+
+```cpp
+(GET|POST|PUT|DELETE) (.+) HTTP/1\.[01]
+```
+
+---
+
+#### 2️⃣ 解析请求头
+
+逐行解析：
+
+```
+Key: Value
+```
+
+直到遇到空行结束。
+
+---
+
+#### 3️⃣ 解析正文
+
+依据：
+
+```
+Content-Length
+```
+
+从 Buffer 中读取指定长度正文。
+
+---
+
+#### 核心接口
+
+```cpp
+bool RecvHttpRequest(Buffer *buf);
+```
+
+特点：
+
+- 无 break 连续推进
+- 一次数据到达可推进多个状态
+- 支持分段接收
+- 支持粘包拆包
+
+---
+
+#### 错误处理
+
+- 请求行格式错误 → RECV_HTTP_ERROR
+- Content-Length 非法 → ERROR
+- URI 过长 → ERROR
+- 非法方法 → ERROR
+
+---
+
+### HttpServer 模块
+
+> 负责路由注册与业务分发  
+
+---
+
+#### 路由数据结构
+
+```cpp
+using Handler = std::function<void(const HttpRequest&, HttpResponse&)>;
+
+std::vector<Route> _get_routes;
+std::vector<Route> _post_routes;
+```
+
+支持：
+
+- 精确匹配
+- 正则匹配
+- REST 风格路径匹配
+
+---
+
+#### 路由注册接口
+
+```cpp
+void Get(const std::string &pattern, Handler handler);
+void Post(const std::string &pattern, Handler handler);
+```
+
+---
+
+#### 路由匹配流程
+
+1. 根据 Method 选择路由表
+2. 顺序匹配 pattern
+3. 匹配成功执行 handler
+4. 未匹配返回 404
+
+---
+
+### 静态资源服务
+
+处理流程：
+
+1. 校验路径合法性
+2. 拼接资源根目录
+3. 判断文件类型
+4. 读取文件内容
+5. 推导 MIME
+6. 构造 HttpResponse
+
+---
+
+### 安全策略
+
+- 禁止访问 `..`
+- 限制访问目录
+- 拒绝非普通文件
+- 处理不存在文件 → 404
+
+---
+
+### 长短连接处理策略
+
+#### 短连接
+
+- 响应发送完成后关闭连接
+- 适用于 HTTP/1.0
+
+#### 长连接
+
+- 发送完成后保留 Channel
+- 等待下一次可读事件
+- 依赖超时机制释放
+
+---

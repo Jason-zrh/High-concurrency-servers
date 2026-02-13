@@ -462,6 +462,7 @@ public:
         return true;
     }
 
+// 所有要素都是公有的，方便访问
 public:
     std::string _method;                                   // 请求方法
     std::string _path;                                     // 资源路径
