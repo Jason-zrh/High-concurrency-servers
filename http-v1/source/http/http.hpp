@@ -1,5 +1,6 @@
 #include "../server.hpp"
 #include <fstream>
+#include <cctype>
 #include <regex> // 正则表达式
 
 #include <sys/stat.h>
@@ -15,7 +16,11 @@ public:
     // 字符串分割 - 返回子串的数量
     static size_t Split(const std::string &src, const std::string &sep, std::vector<std::string> *array)
     {
-        int offset = 0; // 偏移量
+        if (sep.empty())
+            return 0;
+
+        size_t offset = 0; // 偏移量
+
         while (offset < src.size())
         {
             size_t pos = src.find(sep, offset); // 从偏移量后面开始查找字符
@@ -95,7 +100,8 @@ public:
         std::string res;
         for (auto &c : url)
         {
-            if (c == ',' || c == '-' || c == '_' || c == '~' || isalpha(c) || isdigit(c))
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (c == '.' || c == '-' || c == '_' || c == '~' || std::isalpha(uc) || std::isdigit(uc))
             {
                 res += c;
                 continue;
@@ -107,19 +113,20 @@ public:
             }
             // 剩余字符都需要转换为%HH格式
             char tmp[4] = {0};
-            snprintf(tmp, 4, "%%%02X", c);
+            snprintf(tmp, 4, "%%%02X", uc);
             res += tmp;
         }
         return res;
     }
 
-    static char HexToDecimal(char c)
+    static int HexToDecimal(char c)
     {
-        if (isdigit(c))
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (std::isdigit(uc))
             return c - '0';
-        else if (islower(c))
+        else if (std::islower(uc))
             return c - 'a' + 10;
-        else if (isupper(c))
+        else if (std::isupper(uc))
             return c - 'A' + 10;
         else
             return -1;
@@ -130,7 +137,7 @@ public:
     {
         std::string res;
         // 遇到百分号，则将紧跟其后的两个数字转化为字符
-        for (int i = 0; i < url.size(); i++)
+        for (size_t i = 0; i < url.size(); i++)
         {
             if (url[i] == '+' && convert_plus_to_space)
             {
@@ -139,12 +146,15 @@ public:
             }
             if (url[i] == '%' && i + 2 < url.size())
             {
-                char ch1 = HexToDecimal(url[i + 1]);
-                char ch2 = HexToDecimal(url[i + 2]);
-                char ch = (ch1 << 4) + ch2;
-                res += ch;
-                i += 2;
-                continue;
+                int ch1 = HexToDecimal(url[i + 1]);
+                int ch2 = HexToDecimal(url[i + 2]);
+                if (ch1 >= 0 && ch2 >= 0)
+                {
+                    char ch = static_cast<char>((ch1 << 4) + ch2);
+                    res += ch;
+                    i += 2;
+                    continue;
+                }
             }
             res += url[i];
         }
@@ -154,7 +164,7 @@ public:
     // 响应状态码描述信息获取
     static std::string StatuDescribe(int statu)
     {
-        std::unordered_map<int, std::string> statuMap =
+        static const std::unordered_map<int, std::string> statuMap =
             {
                 {100, "Continue"},
                 {101, "Switching Protocol"},
@@ -229,7 +239,7 @@ public:
     // 根据文件后缀名获取mine
     static std::string ExMime(const std::string &filename)
     {
-        std::unordered_map<std::string, std::string> suffixMap =
+        static const std::unordered_map<std::string, std::string> suffixMap =
             {
                 {".aac", "audio/aac"},
                 {".abw", "application/x-abiword"},
@@ -385,7 +395,7 @@ public:
     // 插入头部字段
     void SetHeader(const std::string &key, const std::string &val)
     {
-        _headers.insert(std::make_pair(key, val));
+        _headers[key] = val;
     }
 
     // 判断是否存在指定头部字段
@@ -413,7 +423,7 @@ public:
     // 插入查询字符串
     void SetParam(const std::string &key, const std::string &val)
     {
-        _params.insert(std::make_pair(key, val));
+        _params[key] = val;
     }
 
     // 判断是否有某个指定的查询字符串
@@ -448,7 +458,17 @@ public:
             return 0;
         }
         std::string clen = GetHeader("Content-Length");
-        return std::stol(clen);
+        if (clen.empty())
+            return 0;
+
+        size_t len = 0;
+        for (char c : clen)
+        {
+            if (!std::isdigit(static_cast<unsigned char>(c)))
+                return 0;
+            len = len * 10 + (c - '0');
+        }
+        return len;
     }
 
     // 判断是否是短链接
@@ -501,11 +521,11 @@ public:
     // 插入头部字段
     void SetHeader(const std::string &key, const std::string &val)
     {
-        _headers.insert(std::make_pair(key, val));
+        _headers[key] = val;
     }
 
     // 判断是否存在指定头部字段
-    bool HasHeader(const std::string &key)
+    bool HasHeader(const std::string &key) const
     {
         auto it = _headers.find(key);
         if (it == _headers.end())
@@ -516,7 +536,7 @@ public:
     }
 
     // 获取指定头部字段的值
-    std::string GetHeader(const std::string &key)
+    std::string GetHeader(const std::string &key) const
     {
         auto it = _headers.find(key);
         if (it == _headers.end())
@@ -540,7 +560,7 @@ public:
     }
 
     // 判断是否是短链接
-    bool Close()
+    bool Close() const
     {
         // 没有Connection字段，或者有Connection但是值是close，则都是短链接，否则就是长连接
         if (HasHeader("Connection") == true && GetHeader("Connection") == "keep-alive")
@@ -871,9 +891,11 @@ private:
             rsp_str << head.first << ": " << head.second << "\r\n";
         }
         rsp_str << "\r\n";
-        rsp_str << rsp._body;
+        if (req._method != "HEAD")
+            rsp_str << rsp._body;
         // 3. 发送数据
-        conn->Send(rsp_str.str().c_str(), rsp_str.str().size());
+        std::string response = rsp_str.str();
+        conn->Send(response.c_str(), response.size());
     }
 
     bool IsFileHandler(const HttpRequest &req)
@@ -897,6 +919,10 @@ private:
         //    有一种请求比较特殊 -- 目录：/, /image/， 这种情况给后边默认追加一个 index.html
         // index.html    /image/a.png
         // 不要忘了前缀的相对根目录,也就是将请求路径转换为实际存在的路径  /image/a.png  ->   ./wwwroot/image/a.png
+        if (req._path.empty())
+        {
+            return false;
+        }
         std::string req_path = _basedir + req._path; // 为了避免直接修改请求的资源路径，因此定义一个临时对象
         if (req._path.back() == '/')
         {
@@ -1042,7 +1068,7 @@ public:
         _basedir = path;
     }
 
-    /*设置/添加，请求（请求的正则表达）与处理函数的映射关系*/
+    // 设置 / 添加，请求（请求的正则表达）与处理函数的映射关系
     void Get(const std::string &pattern, const Handler &handler)
     {
         _get_route.push_back(std::make_pair(std::regex(pattern), handler));

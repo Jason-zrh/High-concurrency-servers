@@ -322,7 +322,7 @@ public:
                 continue; // 被信号打断，重试
 
             // 非阻塞情况下这里需要返回了，不然会陷入无限自循环
-            if (errno == EAGAIN)
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
                 return -1; // 当前无连接（非阻塞正常情况）
 
             ERR_LOG("Accept ERR");
@@ -1789,11 +1789,20 @@ private:
     // 获取新连接，调用回调函数
     void HandleRead()
     {
-        int newfd = _socket.Accept();
-        if (newfd < 0)
-            return;
-        if (_accept_callback)
-            _accept_callback(newfd);
+        // int newfd = _socket.Accept();
+        // if (newfd < 0)
+        //     return;
+        // if (_accept_callback)
+        //     _accept_callback(newfd);
+        
+        while (true)
+        {
+            int newfd = _socket.Accept();
+            if (newfd < 0)
+                return;
+            if (_accept_callback)
+                _accept_callback(newfd);
+        }
     }
 
 private:
