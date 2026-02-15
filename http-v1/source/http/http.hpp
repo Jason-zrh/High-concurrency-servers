@@ -575,9 +575,11 @@ typedef enum
 class HttpContext
 {
 private:
+    // 解析请求行
     bool ParseHttpLine(const std::string &line)
     {
         std::smatch matches;
+        // 该表达式捕获四部分：请求方法、路径（不含查询）、可选查询字符串、协议版本
         std::regex e("(GET|HEAD|POST|PUT|DELETE) ([^?]*)(?:\\?(.*))? (HTTP/1\\.[01])(?:\n|\r\n)?", std::regex::icase);
         bool ret = std::regex_match(line, matches, e);
         if (ret == false)
@@ -620,6 +622,8 @@ private:
         return true;
     }
 
+
+    // 获取http请求的首行元素
     bool RecvHttpLine(Buffer *buf)
     {
         if (_recv_statu != RECV_HTTP_LINE)
@@ -655,6 +659,7 @@ private:
         return true;
     }
 
+    // 获取http请求头部信息
     bool RecvHttpHead(Buffer *buf)
     {
         if (_recv_statu != RECV_HTTP_HEAD)
@@ -697,6 +702,7 @@ private:
         return true;
     }
 
+    // 解析头部信息
     bool ParseHttpHead(std::string &line)
     {
         // key: val\r\nkey: val\r\n....
@@ -800,8 +806,16 @@ private:
 //                                            HttpServer模块
 // ====================================================================================================
 
+// 设计一张请求路由表
+// 表中记录针对哪个请求，应该使用哪个函数进行业务处理的映射关系
+// 当服务器收到一个请求，在请求路由表中，查找有没有对应请求恶的处理函数，如果有，则执行对应的处理函数即可
+// 说白了什么请求，怎么处理，由用户来设定，服务器收到了请求只需要执行函数即可
+// 用户只需要实现业务处理函数，然后将请求与处理函数的映射关系添加到服务器中即可
+
+         
 using Handler = std::function<void(const HttpRequest &, HttpResponse *)>;
 using Handlers = std::vector<std::pair<std::regex, Handler>>;
+
 class HttpServer
 {
 private:
