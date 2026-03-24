@@ -706,10 +706,12 @@ public:
             return;
         }
 
+        // 如果要管理的文件描述符存在，直接修改
         if (exist)
             Update(channel, EPOLL_CTL_MOD);
         else
         {
+            // 不存在，添加后修改
             _channels[fd] = channel;
             Update(channel, EPOLL_CTL_ADD);
         }
@@ -1625,7 +1627,7 @@ private:
     void HandleRead()
     {
         // 读取Socket中的数据放到缓冲区
-        char buffer[65536];
+        char buffer[65535];
         bool peer_closed = false;
 
         while (true)
@@ -1818,7 +1820,6 @@ private:
 
 // 目标: 将eventloop模块与线程整合起来
 // EventLoop 与线程是一一对应的，当eventloop构造的时候就会初始化线程id
-
 // eventloop模块在实例化对象的时候必须要在线程内部, 因此必须要先创建线程，然后在线程的函数入口中去实例化eventloop对象
 
 class LoopThread
@@ -1876,7 +1877,7 @@ private:
 // 1. 核心线程数量
 // --- 注意事项 ---
 // 在服务器中，主从Reactor模型是主线程只负责新连接获取，从属线程负责新连接的事件监控和处理
-// 因此当前从属线程数量可能为0， 也就是单Reactor服务器，一个线程负责获取连接，也负责连接的处理
+// 因此当前从属线程数量可能为0，也就是单Reactor服务器，一个线程负责获取连接，也负责连接的处理
 
 // 2. 对所有的线程进行管理，管理0个或多个LoopThread对象
 // 3. 提供线程分配的功能, 主线程获得一个新连接，需要将新连接挂到从属线程上进行事件监控及处理
@@ -1891,6 +1892,7 @@ public:
         , _base_loop(loop)
     { }
 
+    // 设置线程池中的线程数量
     void SetThreadCount(int cnt)
     {
         _thread_count = cnt;
@@ -1911,6 +1913,7 @@ public:
         }
     }
 
+    // RR轮转将主线程获得的连接挂到从连接上
     EventLoop *GetLoop()
     {
         // 轮转派发loop
@@ -1960,7 +1963,7 @@ public:
         , _pool(&_baseloop)
     {
         _acceptor.SetAcceptCallBack(std::bind(&TcpServer::NewConnection, this, std::placeholders::_1));
-        _acceptor.Listen(); // 开始关心事件
+        _acceptor.Listen(); // 监听套接字
     }
 
     // 启动服务器
