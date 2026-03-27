@@ -31,8 +31,11 @@ class EPollPoller : public Poller
   EPollPoller(EventLoop* loop);
   ~EPollPoller() override;
 
+  // 开始监听
   Timestamp poll(int timeoutMs, ChannelList* activeChannels) override;
+  // 更新channel关心的事件
   void updateChannel(Channel* channel) override;
+  // 移除channel
   void removeChannel(Channel* channel) override;
 
  private:
@@ -40,12 +43,13 @@ class EPollPoller : public Poller
 
   static const char* operationToString(int op);
 
+
   void fillActiveChannels(int numEvents,
                           ChannelList* activeChannels) const;
   void update(int operation, Channel* channel);
 
+  
   typedef std::vector<struct epoll_event> EventList;
-
   int epollfd_;
   EventList events_;
 };

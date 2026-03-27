@@ -26,53 +26,56 @@ using namespace muduo::net;
 
 namespace
 {
-__thread EventLoop* t_loopInThisThread = 0;
+  __thread EventLoop *t_loopInThisThread = 0;
 
-const int kPollTimeMs = 10000;
+  const int kPollTimeMs = 10000;
 
-int createEventfd()
-{
-  int evtfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-  if (evtfd < 0)
+  // 创建eventfd，实际上就是后面的wakefd
+  int createEventfd()
   {
-    LOG_SYSERR << "Failed in eventfd";
-    abort();
+    int evtfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (evtfd < 0)
+    {
+      LOG_SYSERR << "Failed in eventfd";
+      abort();
+    }
+    return evtfd;
   }
-  return evtfd;
-}
 
 #pragma GCC diagnostic ignored "-Wold-style-cast"
-class IgnoreSigPipe
-{
- public:
-  IgnoreSigPipe()
+  // 忽略了一些信号，防止被打断
+  class IgnoreSigPipe
   {
-    ::signal(SIGPIPE, SIG_IGN);
-    // LOG_TRACE << "Ignore SIGPIPE";
-  }
-};
+  public:
+    IgnoreSigPipe()
+    {
+      ::signal(SIGPIPE, SIG_IGN);
+      // LOG_TRACE << "Ignore SIGPIPE";
+    }
+  };
 #pragma GCC diagnostic error "-Wold-style-cast"
 
-IgnoreSigPipe initObj;
-}  // namespace
+  IgnoreSigPipe initObj;
+} // namespace
 
-EventLoop* EventLoop::getEventLoopOfCurrentThread()
+
+EventLoop *EventLoop::getEventLoopOfCurrentThread()
 {
   return t_loopInThisThread;
 }
 
 EventLoop::EventLoop()
-  : looping_(false),
-    quit_(false),
-    eventHandling_(false),
-    callingPendingFunctors_(false),
-    iteration_(0),
-    threadId_(CurrentThread::tid()),
-    poller_(Poller::newDefaultPoller(this)),
-    timerQueue_(new TimerQueue(this)),
-    wakeupFd_(createEventfd()),
-    wakeupChannel_(new Channel(this, wakeupFd_)),
-    currentActiveChannel_(NULL)
+    : looping_(false),
+      quit_(false),
+      eventHandling_(false),
+      callingPendingFunctors_(false),
+      iteration_(0),
+      threadId_(CurrentThread::tid()),
+      poller_(Poller::newDefaultPoller(this)),
+      timerQueue_(new TimerQueue(this)),
+      wakeupFd_(createEventfd()),
+      wakeupChannel_(new Channel(this, wakeupFd_)),
+      currentActiveChannel_(NULL)
 {
   LOG_DEBUG << "EventLoop created " << this << " in thread " << threadId_;
   if (t_loopInThisThread)
@@ -105,7 +108,7 @@ void EventLoop::loop()
   assert(!looping_);
   assertInLoopThread();
   looping_ = true;
-  quit_ = false;  // FIXME: what if someone calls quit() before loop() ?
+  quit_ = false; // FIXME: what if someone calls quit() before loop() ?
   LOG_TRACE << "EventLoop " << this << " start looping";
 
   while (!quit_)
@@ -119,7 +122,7 @@ void EventLoop::loop()
     }
     // TODO sort channel by priority
     eventHandling_ = true;
-    for (Channel* channel : activeChannels_)
+    for (Channel *channel : activeChannels_)
     {
       currentActiveChannel_ = channel;
       currentActiveChannel_->handleEvent(pollReturnTime_);
@@ -160,8 +163,8 @@ void EventLoop::runInLoop(Functor cb)
 void EventLoop::queueInLoop(Functor cb)
 {
   {
-  MutexLockGuard lock(mutex_);
-  pendingFunctors_.push_back(std::move(cb));
+    MutexLockGuard lock(mutex_);
+    pendingFunctors_.push_back(std::move(cb));
   }
 
   if (!isInLoopThread() || callingPendingFunctors_)
@@ -198,26 +201,26 @@ void EventLoop::cancel(TimerId timerId)
   return timerQueue_->cancel(timerId);
 }
 
-void EventLoop::updateChannel(Channel* channel)
+void EventLoop::updateChannel(Channel *channel)
 {
   assert(channel->ownerLoop() == this);
   assertInLoopThread();
   poller_->updateChannel(channel);
 }
 
-void EventLoop::removeChannel(Channel* channel)
+void EventLoop::removeChannel(Channel *channel)
 {
   assert(channel->ownerLoop() == this);
   assertInLoopThread();
   if (eventHandling_)
   {
     assert(currentActiveChannel_ == channel ||
-        std::find(activeChannels_.begin(), activeChannels_.end(), channel) == activeChannels_.end());
+           std::find(activeChannels_.begin(), activeChannels_.end(), channel) == activeChannels_.end());
   }
   poller_->removeChannel(channel);
 }
 
-bool EventLoop::hasChannel(Channel* channel)
+bool EventLoop::hasChannel(Channel *channel)
 {
   assert(channel->ownerLoop() == this);
   assertInLoopThread();
@@ -228,7 +231,7 @@ void EventLoop::abortNotInLoopThread()
 {
   LOG_FATAL << "EventLoop::abortNotInLoopThread - EventLoop " << this
             << " was created in threadId_ = " << threadId_
-            << ", current thread id = " <<  CurrentThread::tid();
+            << ", current thread id = " << CurrentThread::tid();
 }
 
 void EventLoop::wakeup()
@@ -257,22 +260,21 @@ void EventLoop::doPendingFunctors()
   callingPendingFunctors_ = true;
 
   {
-  MutexLockGuard lock(mutex_);
-  functors.swap(pendingFunctors_);
+    MutexLockGuard lock(mutex_);
+    functors.swap(pendingFunctors_);
   }
 
-  for (const Functor& functor : functors)
+  for (const Functor &functor : functors)
   {
     functor();
   }
   callingPendingFunctors_ = false;
 }
 
-void EventLoop::printActiveChannels() const
-{
-  for (const Channel* channel : activeChannels_)
-  {
-    LOG_TRACE << "{" << channel->reventsToString() << "} ";
-  }
-}
-
+// void EventLoop::printActiveChannels() const
+// {
+//   for (const Channel* channel : activeChannels_)
+//   {
+//     LOG_TRACE << "{" << channel->reventsToString() << "} ";
+//   }
+// }

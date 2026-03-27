@@ -133,30 +133,50 @@ class EventLoop : noncopyable
   void handleRead();  // waked up
   void doPendingFunctors();
 
-  void printActiveChannels() const; // DEBUG
+  // void printActiveChannels() const; // DEBUG
 
+  // Channel列表
   typedef std::vector<Channel*> ChannelList;
 
+  // 判断是否在loop中
   bool looping_; /* atomic */
-  std::atomic<bool> quit_;
+  // 是否推出
+  std::atomic<bool> quit_; 
+  // 是否在处理回调
   bool eventHandling_; /* atomic */
+  // 是否在执行任务队列
   bool callingPendingFunctors_; /* atomic */
   int64_t iteration_;
+  // 保存对应这个eventloop的线程id，one thread one loop，reactor与线程绑定
   const pid_t threadId_;
+
+
+
+  // epoll返回时间，用来校准定时器 / 事件时间戳
   Timestamp pollReturnTime_;
+  // 对epoll的封装
   std::unique_ptr<Poller> poller_;
+  // 时间轮，用来执行定时任务，销毁超时链接的
   std::unique_ptr<TimerQueue> timerQueue_;
+  // 用来跨线程唤醒线程，本质是linux的eventfd
   int wakeupFd_;
   // unlike in TimerQueue, which is an internal class,
   // we don't expose Channel to client.
+  // 
   std::unique_ptr<Channel> wakeupChannel_;
+  // 管理上下文?
   boost::any context_;
 
   // scratch variables
+
+  // epoll_wait返回的就绪fd列表
   ChannelList activeChannels_;
+  // 正在处理的channel
   Channel* currentActiveChannel_;
 
+  // 自己封装的锁
   mutable MutexLock mutex_;
+  // 任务队列(被锁保护，因为可能同时有多个线程向任务队列投放任务)
   std::vector<Functor> pendingFunctors_ GUARDED_BY(mutex_);
 };
 
