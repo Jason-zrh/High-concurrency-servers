@@ -93,12 +93,6 @@ void EPollPoller::fillActiveChannels(int numEvents,
   for (int i = 0; i < numEvents; ++i)
   {
     Channel* channel = static_cast<Channel*>(events_[i].data.ptr);
-#ifndef NDEBUG
-    int fd = channel->fd();
-    ChannelMap::const_iterator it = channels_.find(fd);
-    assert(it != channels_.end());
-    assert(it->second == channel);
-#endif
     channel->set_revents(events_[i].events);
     activeChannels->push_back(channel);
   }
@@ -174,6 +168,7 @@ void EPollPoller::update(int operation, Channel* channel)
   struct epoll_event event;
   memZero(&event, sizeof event);
   event.events = channel->events();
+  // 在这里events的data中存的是channel的指针
   event.data.ptr = channel;
   int fd = channel->fd();
   LOG_TRACE << "epoll_ctl op = " << operationToString(operation)

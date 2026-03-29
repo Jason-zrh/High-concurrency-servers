@@ -144,9 +144,8 @@ class EventLoop : noncopyable
   std::atomic<bool> quit_; 
   // 是否在处理回调
   bool eventHandling_; /* atomic */
-  // 是否在执行任务队列
+  // 是否在执行任务队列中的任务
   bool callingPendingFunctors_; /* atomic */
-  int64_t iteration_;
   // 保存对应这个eventloop的线程id，one thread one loop，reactor与线程绑定
   const pid_t threadId_;
 
@@ -171,7 +170,7 @@ class EventLoop : noncopyable
 
   // epoll_wait返回的就绪fd列表
   ChannelList activeChannels_;
-  // 正在处理的channel
+  // 正在处理的channel，防止在处理任务的时候被remove
   Channel* currentActiveChannel_;
 
   // 自己封装的锁

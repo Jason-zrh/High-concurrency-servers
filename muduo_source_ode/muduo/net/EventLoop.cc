@@ -26,7 +26,7 @@ using namespace muduo::net;
 
 namespace
 {
-  __thread EventLoop *t_loopInThisThread = 0;
+  __thread EventLoop * t_loopInThisThread = 0;
 
   const int kPollTimeMs = 10000;
 
@@ -87,6 +87,7 @@ EventLoop::EventLoop()
   {
     t_loopInThisThread = this;
   }
+  // 给唤醒的线程绑定读回调，防止eventfd一直通知
   wakeupChannel_->setReadCallback(
       std::bind(&EventLoop::handleRead, this));
   // we are always reading the wakeupfd
@@ -115,11 +116,7 @@ void EventLoop::loop()
   {
     activeChannels_.clear();
     pollReturnTime_ = poller_->poll(kPollTimeMs, &activeChannels_);
-    ++iteration_;
-    if (Logger::logLevel() <= Logger::TRACE)
-    {
-      printActiveChannels();
-    }
+    
     // TODO sort channel by priority
     eventHandling_ = true;
     for (Channel *channel : activeChannels_)

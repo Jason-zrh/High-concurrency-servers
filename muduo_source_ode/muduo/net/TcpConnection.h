@@ -62,6 +62,7 @@ class TcpConnection : noncopyable,
   bool getTcpInfo(struct tcp_info*) const;
   string getTcpInfoString() const;
 
+
   // void send(string&& message); // C++11
   void send(const void* message, int len);
   void send(const StringPiece& message);
@@ -77,6 +78,9 @@ class TcpConnection : noncopyable,
   void stopRead();
   bool isReading() const { return reading_; }; // NOT thread safe, may race with start/stopReadInLoop
 
+
+
+  
   void setContext(const boost::any& context)
   { context_ = context; }
 
@@ -120,6 +124,11 @@ class TcpConnection : noncopyable,
   void handleWrite();
   void handleClose();
   void handleError();
+
+
+
+
+
   // void sendInLoop(string&& message);
   void sendInLoop(const StringPiece& message);
   void sendInLoop(const void* message, size_t len);
@@ -130,6 +139,11 @@ class TcpConnection : noncopyable,
   const char* stateToString() const;
   void startReadInLoop();
   void stopReadInLoop();
+
+
+
+
+
 
   EventLoop* loop_;
   const string name_;
